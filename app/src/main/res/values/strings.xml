@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AL-thmany Extractor Pro</string>
+    <string name="accessibility_service_description">يقرأ عناصر واجهة واتساب الظاهرة للمستخدم لاستخراج الروابط من المجموعات المحددة، مع التمرير والحفظ والاستكمال.</string>
+</resources>

@@ -1,0 +1,26 @@
+AL-thmany Extractor 2.11.0 — Runtime Parity 2.8
+
+تمت مراجعة المصدر مقابل AL-thmany-2.8.0-main المرفق.
+
+المطبق:
+- live Accessibility instance from onCreate/onServiceConnected/event heartbeat
+- profile-local Android user binding
+- Event-first controller wake-up
+- fallback poll = 95ms
+- active-operation event routing
+- WhatsApp-first runtime activation for Extraction/Scan/Publish
+- service instance recovery
+- adaptive chat-list row detection
+- Kotlin 2.3 setContent import fix
+- SQLite mixed bind argument type fix
+
+وظائف التطبيق المحفوظة:
+- Extraction
+- Scan (read-only)
+- Publish
+
+غير منقول عمدًا:
+- Join/Request-to-Join actions from the reference app
+- blind/visual join fallback
+
+هذا فحص مصدر بنيوي. الحكم النهائي للـ APK يتم عبر GitHub Actions/Android SDK.

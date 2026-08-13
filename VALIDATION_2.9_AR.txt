@@ -1,0 +1,19 @@
+AL-thmany Extractor Pro 2.9.0 — Local Source Validation
+
+Basis:
+- AL-thmany-Extractor-Android-v2.4-Publish-Source.zip
+
+Confirmed locally:
+- Extraction feature files present: PASS
+- Scan Pro feature files present: PASS
+- Publish feature files present: PASS
+- No QuickJoin/Join Queue components: PASS
+- RuntimeOperationCoordinator pure regression: PASS
+- LinkExtractor / EndProof / Profile policy pure checks: PASS
+- Scan classifier / retry policy pure checks: PASS
+- Publish stats / timing pure checks: PASS
+- Batch link persistence source contract: PASS
+- API36 build matrix source contract: PASS
+- Privacy manifest checks: PASS
+
+Android APK compilation is delegated to the included GitHub Actions workflow because this delivery environment does not contain a complete Android SDK/Gradle dependency cache.

@@ -1,0 +1,47 @@
+AL-thmany Extractor 2.12.0 — Neon Real UI
+==============================================
+Actual Android/Jetpack Compose redesign; not mockup images.
+
+PASS: AGP 8.13.2
+PASS: Kotlin 2.3.21
+PASS: compileSdk 36
+PASS: targetSdk 36
+PASS: versionCode 2120
+PASS: versionName 2.12.0
+PASS: Compose API36 BOM
+PASS: modern compilerOptions
+PASS: Extraction UI
+PASS: Scan UI
+PASS: Publish UI
+PASS: Neon real UI
+PASS: Real WhatsApp open action
+PASS: Real engine actions retained
+PASS: Batch link persistence
+PASS: Batch scan import
+PASS: Extractor/Scan/Publish event backpressure
+PASS: Active-engine event routing
+PASS: Runtime bridge live instance
+PASS: 95ms fallback poll
+PASS: WhatsApp-first activation
+PASS: Adaptive chat rows
+PASS: SQLite WAL tuning
+PASS: No backup
+PASS: No cleartext traffic
+
+AL-thmany Extractor 2.12.0 Neon Real UI source contract: PASS
+
+AL-thmany v2.10 pure engine/profile checks: PASS
+PureScanChecks v2.10: PASS
+PurePublishChecks v2.10: OK
+PureRuntimeChecks: OK
+
+ALL PURE CHECKS: PASS
+
+UI wiring:
+- Extraction open WhatsApp -> onOpenWhatsApp -> ExtractionController.openWhatsApp()
+- Extraction start/pause/resume/stop callbacks retained
+- Scan start/import/export callbacks retained
+- Publish group selection/message/start/export callbacks retained
+- WhatsApp/Business selector -> AppViewModel.setTargetWhatsApp
+
+Android APK was not built locally in this container; GitHub Actions remains final Android compiler/runtime check.

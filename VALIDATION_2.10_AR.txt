@@ -1,0 +1,44 @@
+AL-thmany Extractor TurboCore 2.10.0 — Validation
+=================================================
+
+الهوية:
+- التطبيق: Extractor وليس Joiner.
+- الأقسام: الاستخراج | الفحص | النشر.
+- لا يوجد QuickJoin / Join Queue / AutoJoin.
+
+مصفوفة البناء:
+- AGP 8.13.2
+- Gradle 8.13 عبر GitHub Actions
+- Kotlin 2.3.21
+- JDK 17
+- compileSdk 36
+- targetSdk 36
+- minSdk 26
+- Compose BOM 2026.04.01
+- versionCode 2100
+- versionName 2.10.0
+
+تطويرات الأداء المؤكدة في المصدر:
+- Active-engine Accessibility event routing.
+- SharedFlow one-slot DROP_OLDEST backpressure للمحركات الثلاثة.
+- Event-first extraction settle أقصر مع Strict End Proof محفوظ.
+- Batch SQLite persistence للروابط المستخرجة.
+- Batch SQLite import لروابط Scan.
+- WAL + SQLite mobile tuning.
+- عدم إعادة تشغيل WhatsApp إذا كانت الحزمة الصحيحة في الواجهة.
+- RuntimeOperationCoordinator يحمي الاستخراج والفحص والنشر ومزامنة القروبات من التداخل.
+- Scan package guard.
+- Publish package guard + duplicate-send protection محفوظ.
+
+نتائج التحقق المنفذ محليًا:
+PASS: scripts/validate_release.py
+PASS: PureEngineChecks v2.10
+PASS: PureScanChecks v2.10
+PASS: PurePublishChecks v2.10
+PASS: PureRuntimeChecks
+
+مهم:
+- لم يتم بناء APK نهائي محليًا لأن بيئة التسليم لا تحتوي Android SDK/Gradle كاملًا.
+- GitHub Actions في .github/workflows/build-apk.yml هو الحكم النهائي لـ testDebugUnitTest + lintDebug + assembleDebug.
+- اختلاف Accessibility tree بين إصدارات WhatsApp يحتاج اختبارًا فعليًا على الهاتف.
+- النسخة لا تتجاوز Knox/MDM ولا قيود WhatsApp.
