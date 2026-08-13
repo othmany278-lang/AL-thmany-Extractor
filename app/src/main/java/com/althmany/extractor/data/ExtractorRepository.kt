@@ -10,13 +10,19 @@ class ExtractorRepository(private val db: ExtractorDatabase) {
         db.replaceGroups(text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList())
     }
     suspend fun addDiscoveredGroups(names: Collection<String>): Int = withContext(Dispatchers.IO) { db.addDiscoveredGroups(names) }
+    suspend fun addDiscoveredGroupCandidates(candidates: Collection<GroupSyncCandidate>): Int = withContext(Dispatchers.IO) {
+        db.addDiscoveredGroupCandidates(candidates)
+    }
     suspend fun groups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getGroups() }
     suspend fun pendingSelectedGroups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getSelectedPendingGroups() }
     suspend fun selectedGroups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getSelectedGroups() }
     suspend fun setSelected(id: Long, selected: Boolean) = withContext(Dispatchers.IO) { db.setGroupSelected(id, selected) }
     suspend fun setAllSelected(selected: Boolean) = withContext(Dispatchers.IO) { db.setAllGroupsSelected(selected) }
+    suspend fun setSelectionPreset(preset: GroupSelectionPreset) = withContext(Dispatchers.IO) { db.setSelectionPreset(preset) }
     suspend fun updateStatus(id: Long, status: GroupStatus, error: String? = null) = withContext(Dispatchers.IO) { db.updateGroupStatus(id, status, error) }
     suspend fun markVerifiedGroup(id: Long, verified: Boolean) = withContext(Dispatchers.IO) { db.markVerifiedGroup(id, verified) }
+    suspend fun updateGroupCapabilities(id: Long, verified: Boolean, active: Boolean, publishable: Boolean, communityParent: Boolean = false) =
+        withContext(Dispatchers.IO) { db.updateGroupCapabilities(id, verified, active, publishable, communityParent) }
     suspend fun resetRunStatuses() = withContext(Dispatchers.IO) { db.resetRunStatuses() }
     suspend fun saveLink(url: String, normalized: String, groupName: String): Boolean = withContext(Dispatchers.IO) {
         db.upsertLink(url, normalized, groupName, System.currentTimeMillis())
@@ -86,8 +92,19 @@ class ExtractorRepository(private val db: ExtractorDatabase) {
     suspend fun scanStats(): ScanStats = withContext(Dispatchers.IO) { db.scanStats() }
 
     suspend fun stopResumablePublishRuns() = withContext(Dispatchers.IO) { db.stopResumablePublishRuns() }
-    suspend fun createPublishRun(message: String, targetPackage: String, delayMs: Long, maxAttempts: Int, groupNames: List<String>): Long =
-        withContext(Dispatchers.IO) { db.createPublishRun(message, targetPackage, delayMs, maxAttempts, groupNames) }
+    suspend fun createPublishRun(
+        message: String,
+        targetPackage: String,
+        delayMs: Long,
+        maxAttempts: Int,
+        groupNames: List<String>,
+        contentMode: PublishContentMode,
+        attachmentUri: String?,
+        attachmentMime: String?,
+        runToken: String
+    ): Long = withContext(Dispatchers.IO) {
+        db.createPublishRun(message, targetPackage, delayMs, maxAttempts, groupNames, contentMode, attachmentUri, attachmentMime, runToken)
+    }
     suspend fun publishRun(id: Long): PublishRun? = withContext(Dispatchers.IO) { db.getPublishRun(id) }
     suspend fun resumablePublishRun(): PublishRun? = withContext(Dispatchers.IO) { db.latestResumablePublishRun() }
     suspend fun publishItems(runId: Long): List<PublishItem> = withContext(Dispatchers.IO) { db.getPublishItems(runId) }

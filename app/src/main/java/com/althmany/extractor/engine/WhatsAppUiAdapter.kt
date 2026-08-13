@@ -1,8 +1,12 @@
 package com.althmany.extractor.engine
 
 import android.graphics.Rect
+import android.text.Spanned
+import android.text.style.URLSpan
+import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
+import com.althmany.extractor.data.GroupSyncCandidate
 import java.util.Locale
 
 /**
@@ -142,8 +146,31 @@ class WhatsAppUiAdapter {
         val urls = linkedSetOf<String>()
         walk(root) { node ->
             if (!node.isVisibleToUser) return@walk
-            LinkExtractor.extract(node.text).forEach(urls::add)
+
+            // Android has no WhatsApp-Web DOM/Store. Merge every URL-bearing surface that the
+            // real app exposes through the accessibility hierarchy: message body/caption text,
+            // preview descriptions, hints/tooltips and URLSpan metadata.
+            val text = node.text
+            LinkExtractor.extract(text).forEach(urls::add)
             LinkExtractor.extract(node.contentDescription).forEach(urls::add)
+            LinkExtractor.extract(node.hintText).forEach(urls::add)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                LinkExtractor.extract(node.tooltipText).forEach(urls::add)
+            }
+            if (text is Spanned) {
+                text.getSpans(0, text.length, URLSpan::class.java)
+                    .mapNotNull { it.url }
+                    .forEach { LinkExtractor.extract(it).forEach(urls::add) }
+            }
+
+            // Some WhatsApp builds attach preview/link strings as node extras. Read only public
+            // accessibility extras and ignore opaque values; no private database/Store access.
+            runCatching {
+                node.extras.keySet().forEach { key ->
+                    val value = node.extras.get(key)
+                    if (value is CharSequence) LinkExtractor.extract(value).forEach(urls::add)
+                }
+            }
         }
         return urls
     }
@@ -242,12 +269,13 @@ class WhatsAppUiAdapter {
     }
 
     /**
-     * Collects candidate conversation titles from the WhatsApp chat list. Android does not expose
-     * WhatsApp's private group database, so discovered names remain unverified until opened.
+     * Collects chat-list candidates plus the lightweight metadata WhatsApp exposes visually.
+     * These are hints only; a candidate is not treated as a verified group until the engine opens
+     * its info surface and sees strong group-only controls.
      */
-    fun collectChatListCandidates(root: AccessibilityNodeInfo?): Set<String> {
+    fun collectChatListCandidatesDetailed(root: AccessibilityNodeInfo?): Set<GroupSyncCandidate> {
         if (root == null) return emptySet()
-        val out = linkedSetOf<String>()
+        val byName = linkedMapOf<String, GroupSyncCandidate>()
         walk(root) { node ->
             if (!node.isVisibleToUser) return@walk
             val row = when {
@@ -258,14 +286,38 @@ class WhatsAppUiAdapter {
             } ?: return@walk
             val bounds = Rect(); row.getBoundsInScreen(bounds)
             if (bounds.height() < 40 || bounds.height() > 420) return@walk
-            val texts = descendantTexts(row, 24)
-            val title = texts.firstOrNull(::looksLikeConversationTitle) ?: return@walk
-            out.add(title)
+            val labels = descendantLabels(row, 32)
+            val title = labels.firstOrNull(::looksLikeConversationTitle) ?: return@walk
+            val joined = labels.joinToString(" | ")
+            val unread = parseUnreadCount(joined)
+            val inactive = inactiveConversationPatterns.any { joined.contains(it, ignoreCase = true) }
+            val communityParent = communityParentPatterns.any { joined.contains(it, ignoreCase = true) }
+            val activity = labels.drop(1).firstOrNull { looksLikeActivityLabel(it) }
+            val candidate = GroupSyncCandidate(
+                name = title,
+                unreadCount = unread,
+                activityText = activity,
+                active = !inactive,
+                publishableHint = !inactive && !communityParent,
+                communityParentHint = communityParent
+            )
+            val previous = byName[title.lowercase(Locale.ROOT)]
+            byName[title.lowercase(Locale.ROOT)] = if (previous == null) candidate else previous.copy(
+                unreadCount = maxOf(previous.unreadCount, candidate.unreadCount),
+                activityText = previous.activityText ?: candidate.activityText,
+                active = previous.active || candidate.active,
+                publishableHint = previous.publishableHint || candidate.publishableHint,
+                communityParentHint = previous.communityParentHint || candidate.communityParentHint
+            )
         }
-        return out
+        return byName.values.toSet()
     }
 
+    fun collectChatListCandidates(root: AccessibilityNodeInfo?): Set<String> =
+        collectChatListCandidatesDetailed(root).mapTo(linkedSetOf()) { it.name }
+
     fun scrollChatListForward(root: AccessibilityNodeInfo?): Boolean = scrollGenericForward(root)
+    fun scrollChatListBackward(root: AccessibilityNodeInfo?): Boolean = scrollToOlderMessages(root)
 
     fun openArchived(root: AccessibilityNodeInfo?): Boolean {
         val node = findVisibleNodeByPatterns(root, archivedPatterns) ?: return false
@@ -314,6 +366,24 @@ class WhatsAppUiAdapter {
             if (bounds.top < minTop) return@walk
             val label = listOfNotNull(node.text?.toString(), node.contentDescription?.toString()).joinToString(" ")
             if (labels.any { label.trim().equals(it, true) || label.contains(it, true) } && hasClickableSelfOrAncestor(node)) {
+                candidate = node
+            }
+        }
+        return candidate?.let(::clickNodeOrParent) == true
+    }
+
+    fun clickPositiveShareAction(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        val labels = listOf("إرسال", "Send", "التالي", "Next", "تم", "Done", "مشاركة", "Share")
+        val window = Rect().also(root::getBoundsInScreen)
+        val minTop = window.top + (window.height() * 0.40f).toInt()
+        var candidate: AccessibilityNodeInfo? = null
+        walk(root) { node ->
+            if (candidate != null || !node.isVisibleToUser) return@walk
+            val bounds = Rect().also(node::getBoundsInScreen)
+            if (bounds.top < minTop) return@walk
+            val label = listOfNotNull(node.text?.toString(), node.contentDescription?.toString()).joinToString(" ").trim()
+            if (labels.any { label.equals(it, true) || label.contains(it, true) } && hasClickableSelfOrAncestor(node)) {
                 candidate = node
             }
         }
@@ -404,6 +474,45 @@ class WhatsAppUiAdapter {
             parent = parent.parent
         }
         return false
+    }
+
+    private val inactiveConversationPatterns = listOf(
+        "تمت إزالتك", "تمت ازالتك", "لم تعد مشارك", "غادرت المجموعة",
+        "you were removed", "you are no longer a participant", "you left"
+    )
+
+    private val communityParentPatterns = listOf(
+        "إعلان المجتمع", "مجتمع", "community announcement", "community"
+    )
+
+    private fun descendantLabels(node: AccessibilityNodeInfo, limit: Int): List<String> {
+        val out = mutableListOf<String>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>(); stack.add(node)
+        while (stack.isNotEmpty() && out.size < limit) {
+            val n = stack.removeLast()
+            n.text?.toString()?.trim()?.takeIf(String::isNotEmpty)?.let(out::add)
+            n.contentDescription?.toString()?.trim()?.takeIf(String::isNotEmpty)?.let(out::add)
+            for (i in n.childCount - 1 downTo 0) n.getChild(i)?.let(stack::add)
+        }
+        return out.distinct()
+    }
+
+    private fun parseUnreadCount(labels: String): Int {
+        val hasUnread = listOf("غير مقرو", "unread").any { labels.contains(it, ignoreCase = true) }
+        if (!hasUnread) return 0
+        val latinized = labels
+            .replace('٠','0').replace('١','1').replace('٢','2').replace('٣','3').replace('٤','4')
+            .replace('٥','5').replace('٦','6').replace('٧','7').replace('٨','8').replace('٩','9')
+            .replace('۰','0').replace('۱','1').replace('۲','2').replace('۳','3').replace('۴','4')
+            .replace('۵','5').replace('۶','6').replace('۷','7').replace('۸','8').replace('۹','9')
+        return Regex("\\b(\\d{1,4})\\b").findAll(latinized).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull() ?: 1
+    }
+
+    private fun looksLikeActivityLabel(value: String): Boolean {
+        val s = value.trim()
+        if (s.isBlank() || s.length > 80) return false
+        if (s.contains("unread", true) || s.contains("غير مقرو", true)) return false
+        return s.matches(Regex(".*([0-9٠-٩۰-۹]{1,2}:[0-9٠-٩۰-۹]{2}|اليوم|أمس|امس|today|yesterday|ص|م|AM|PM).*", RegexOption.IGNORE_CASE))
     }
 
     private fun descendantTexts(node: AccessibilityNodeInfo, limit: Int): List<String> {

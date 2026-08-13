@@ -15,10 +15,10 @@ enum class GroupStatus {
 }
 
 enum class ExtractionMode(val labelAr: String) {
-    LINKS_TAB("استخراج سريع"),
-    DEEP("عميق موثوق"),
-    ALL_CHATS("جميع الدردشات"),
-    NEW_ONLY("الجديد فقط"),
+    LINKS_TAB("استخراج Links Tab"),
+    DEEP("Deep — عميق"),
+    ALL_CHATS("All Chats"),
+    NEW_ONLY("غير المقروء/الجديد"),
     SMART("ذكي تلقائي")
 }
 
@@ -28,6 +28,15 @@ enum class SpeedProfile(val labelAr: String) {
     HYPER("HyperDrive"),
     BALANCED("متوازن"),
     SAFE("دقيق وآمن")
+}
+
+enum class GroupSelectionPreset(val labelAr: String) {
+    ALL("تحديد الكل"),
+    NONE("إلغاء التحديد"),
+    UNREAD("غير المقروءة"),
+    ACTIVE("النشطة"),
+    PUBLISHABLE("القابلة للنشر"),
+    UNVERIFIED("غير المؤكدة")
 }
 
 data class ExtractionPreferences(
@@ -40,6 +49,20 @@ data class ExtractionPreferences(
     val targetWhatsAppPackage: String? = null
 )
 
+/**
+ * Metadata visible from a WhatsApp chat-list row. Android does not expose WhatsApp's private
+ * message/group database, so these are UI-derived hints. Group identity is still verified by
+ * opening the chat before extraction/publishing.
+ */
+data class GroupSyncCandidate(
+    val name: String,
+    val unreadCount: Int = 0,
+    val activityText: String? = null,
+    val active: Boolean = true,
+    val publishableHint: Boolean = true,
+    val communityParentHint: Boolean = false
+)
+
 data class TargetGroup(
     val id: Long,
     val name: String,
@@ -48,8 +71,25 @@ data class TargetGroup(
     val extractedCount: Int,
     val lastError: String?,
     val discovered: Boolean = false,
-    val verifiedGroup: Boolean = false
+    val verifiedGroup: Boolean = false,
+    val unreadCount: Int = 0,
+    val activityText: String? = null,
+    val active: Boolean = true,
+    val publishable: Boolean = true,
+    val communityParent: Boolean = false,
+    val lastSyncedAt: Long? = null
 )
+
+
+enum class LinkCategory(val labelAr: String) {
+    WHATSAPP("WhatsApp"),
+    TELEGRAM("Telegram"),
+    INSTAGRAM("Instagram"),
+    FACEBOOK("Facebook"),
+    GOOGLE("Google"),
+    PDF("PDF"),
+    OTHER("أخرى")
+}
 
 data class LinkRecord(
     val id: Long,
@@ -105,5 +145,9 @@ data class ExtractionStats(
     val completedGroups: Int = 0,
     val failedGroups: Int = 0,
     val totalUniqueLinks: Int = 0,
-    val totalOccurrences: Int = 0
+    val totalOccurrences: Int = 0,
+    val syncedGroups: Int = 0,
+    val unreadGroups: Int = 0,
+    val activeGroups: Int = 0,
+    val publishableGroups: Int = 0
 )

@@ -3,6 +3,7 @@ package com.althmany.extractor
 import android.Manifest
 import android.content.Context
 import android.os.Bundle
+import android.content.Intent
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import com.althmany.extractor.engine.ExtractionController
 import com.althmany.extractor.engine.ScanController
 import com.althmany.extractor.engine.PublishController
+import com.althmany.extractor.data.PublishContentMode
 import com.althmany.extractor.export.ExportFormat
 import com.althmany.extractor.export.ExportManager
 import com.althmany.extractor.ui.AlThmanyTheme
@@ -116,6 +118,18 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
         }
     }
 
+    val pickPublishAttachment = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val mime = context.contentResolver.getType(uri)
+            viewModel.setPublishAttachment(uri.toString(), mime)
+        }
+    }
+
     Scaffold(
         bottomBar = {
             BottomBar(
@@ -188,6 +202,16 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onGroups = { screen = AppScreen.GROUPS },
                     onTargetWhatsApp = viewModel::setTargetWhatsApp,
                     onDraftChanged = viewModel::setPublishDraft,
+                    onContentMode = viewModel::setPublishContentMode,
+                    onPickAttachment = { mode ->
+                        val types = if (mode == PublishContentMode.IMAGE_WITH_CAPTION) {
+                            arrayOf("image/*")
+                        } else {
+                            arrayOf("text/x-vcard", "text/vcard", "text/plain", "*/*")
+                        }
+                        pickPublishAttachment.launch(types)
+                    },
+                    onClearAttachment = { viewModel.setPublishAttachment(null, null) },
                     onSpeed = viewModel::setPublishSpeed,
                     onMaxAttempts = viewModel::setPublishMaxAttempts,
                     onStart = PublishController::start,
@@ -207,8 +231,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     groups = groups,
                     onAddGroups = viewModel::addGroups,
                     onSelected = viewModel::setSelected,
-                    onSelectAll = { viewModel.setAllSelected(true) },
-                    onClearSelection = { viewModel.setAllSelected(false) },
+                    onPreset = viewModel::applyGroupSelectionPreset,
                     onStart = {
                         screen = AppScreen.HOME
                         ExtractionController.start()

@@ -1,12 +1,22 @@
 package com.althmany.extractor.data
 
+enum class PublishContentMode(val labelAr: String, val attachmentRequired: Boolean = false) {
+    SINGLE_TEXT("نص واحد"),
+    MULTI_TEXT("رسائل متعددة"),
+    CONTACT_TEXT("جهات اتصال كنص"),
+    VCF("بطاقة VCF", true),
+    VCF_WITH_TEXT("VCF + نص", true),
+    IMAGE_WITH_CAPTION("صورة + تعليق", true)
+}
+
 enum class PublishStatus(val labelAr: String) {
     PENDING("بانتظار النشر"),
     OPENING("فتح القروب"),
-    PREPARING("تحضير الرسالة"),
+    PREPARING("تحضير المحتوى"),
     SENDING("جارٍ الإرسال"),
     SENT("تم الإرسال"),
     VERIFIED("تم التحقق"),
+    UNCERTAIN("غير محسوم — لن يُعاد تلقائيًا"),
     FAILED("فشل"),
     SKIPPED("تم التخطي")
 }
@@ -21,7 +31,11 @@ data class PublishRun(
     val createdAt: Long,
     val updatedAt: Long,
     val delayMs: Long,
-    val maxAttempts: Int
+    val maxAttempts: Int,
+    val contentMode: PublishContentMode = PublishContentMode.SINGLE_TEXT,
+    val attachmentUri: String? = null,
+    val attachmentMime: String? = null,
+    val runToken: String = ""
 )
 
 data class PublishItem(
@@ -41,7 +55,8 @@ data class PublishStats(
     val sent: Int = 0,
     val verified: Int = 0,
     val failed: Int = 0,
-    val skipped: Int = 0
+    val skipped: Int = 0,
+    val uncertain: Int = 0
 ) {
-    val completed: Int get() = (sent + verified + failed + skipped).coerceAtMost(total)
+    val completed: Int get() = (sent + verified + failed + skipped + uncertain).coerceAtMost(total)
 }

@@ -153,6 +153,15 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         return dispatchSwipe(x, fromY, x, toY, durationMs)
     }
 
+    /** Gesture fallback for restoring the chat list toward the position visible before sync. */
+    fun swipeChatListBackward(durationMs: Long): Boolean {
+        val dm = resources.displayMetrics
+        val x = dm.widthPixels * 0.52f
+        val fromY = dm.heightPixels * 0.30f
+        val toY = dm.heightPixels * 0.78f
+        return dispatchSwipe(x, fromY, x, toY, durationMs)
+    }
+
     private fun dispatchSwipe(
         fromX: Float,
         fromY: Float,

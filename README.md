@@ -1,3 +1,23 @@
+# AL-thmany Extractor 2.13.0 — Native Parity
+
+هذه النسخة تنقل فلسفة **WA-Workspace: الاستخراج | الفحص | النشر** إلى تطبيق Android يعمل مع تطبيق WhatsApp الحقيقي (`com.whatsapp`) أو WhatsApp Business (`com.whatsapp.w4b`) **بدون WhatsApp Web وبدون WebView**.
+
+> ملاحظة تقنية: Android لا يتيح للتطبيق الوصول إلى WhatsApp Web Store أو `chat.sendMessage()` أو قاعدة بيانات واتساب الخاصة. لذلك 2.13 يحافظ على نفس التسلسل والضمانات قدر الإمكان عبر واجهة Android الحقيقية: Accessibility/Event-first للاستخراج والفحص والنشر النصي، وAndroid `ACTION_SEND` للمرفقات. لا توجد طبقة Shizuku حقيقية في هذا الإصدار بعد.
+
+## ما الجديد في 2.13.0
+
+- **مزامنة أغنى للقائمة:** اسم المحادثة + غير المقروء + آخر نشاط ظاهر + مؤشرات النشاط/القابلية للنشر/Community Parent، مع بقاء المرشحين غير مؤكدين حتى فتحهم والتحقق منهم كقروب.
+- **تحديد سريع للقروبات:** الكل، إلغاء الكل، غير المقروءة، النشطة، القابلة للنشر، وغير المؤكدة؛ مع بحث واختيار يدوي.
+- **Deep Extraction:** التقاط الروابط أثناء التمرير للأقدم، زر تحميل الرسائل الأقدم إن كشفته واجهة واتساب، Strict End Proof، Checkpoint واستكمال ثم القروب التالي تلقائيًا.
+- **التقاط روابط متعدد الأسطح:** `text` + `contentDescription` + `hintText` + `tooltipText` + `URLSpan` + public Accessibility extras، ثم normalization/dedupe.
+- **Scan Exact-Once:** رابط واحد في كل لحظة، فتح مرئي، Connectivity Guard يعيد **نفس الرابط** بعد عودة الشبكة، Stable Result Gate، وحد Adaptive للحالات غير الواضحة 5.6s، ثم Commit قبل الانتقال. الفحص لا يضغط Join/Request.
+- **Publish Native:** Preflight + القروبات المحددة والقابلة للنشر فقط + Single-Flight + Run Token + حماية `UNCERTAIN` لمنع إعادة الإرسال العمياء بعد نتيجة غير محسومة.
+- **أنواع النشر:** نص واحد، رسائل متعددة بتوزيع دائري، جهات اتصال كنص (`الاسم | الرقم`)، VCF، VCF + نص، وصورة + تعليق عبر مسار المشاركة الأصلي في Android.
+- **سرعة صادقة:** Turbo في النشر = 1.0 ثانية فعلية كحد pacing بين القروبات، وليست تسمية واجهة غير مطابقة للمحرك.
+- **إصلاح Build معروف:** إزالة import `androidx.compose.foundation.layout.weight` الذي كان يوقف Kotlin 2.3.21 في GitHub Actions.
+
+راجع `NATIVE_PARITY_2.13_AR.md` و`CHANGELOG_2.13_AR.md` للتفاصيل.
+
 # AL-thmany Extractor 2.11.0 — Runtime Parity 2.8
 
 ## آلية التشغيل الجديدة
@@ -180,7 +200,7 @@ Android يعزل بيانات التطبيقات. لذلك AL-thmany لا يقر
 - JDK 17.
 - Compose BOM 2026.04.01 (Compose 1.11 family، قبل متطلب compileSdk 37 في Compose 1.12).
 
-المستودع يحتوي Workflow جاهز في `.github/workflows/build-apk.yml`. عند الرفع إلى `main` ينفذ اختبارات الوحدة وLint ثم `assembleDebug` ويرفع APK كـ Artifact باسم `AL-thmany-Extractor-TurboCore-2.10.0-APK`.
+المستودع يحتوي Workflow جاهز في `.github/workflows/build-apk.yml`. عند الرفع إلى `main` ينفذ اختبارات الوحدة وLint ثم `assembleDebug` ويرفع APK كـ Artifact باسم `AL-thmany-Extractor-NativeParity-2.13.0-APK`.
 
 ## التحقق المنفذ في بيئة التطوير
 

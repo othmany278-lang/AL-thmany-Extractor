@@ -3,6 +3,8 @@ package com.althmany.extractor.engine
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 import com.althmany.extractor.accessibility.AccessibilityRuntimeBridge
 import com.althmany.extractor.accessibility.WhatsAppAccessibilityService
@@ -218,6 +220,7 @@ object ScanController {
 
             for ((index, item) in items.withIndex()) {
                 waitIfPaused()
+                awaitNetworkAvailability()
                 var finalResult: TimedDecision? = null
 
                 for (attempt in 1..maxAttempts) {
@@ -317,6 +320,7 @@ object ScanController {
                 0L
             )
 
+        awaitNetworkAvailability()
         if (!openInvite(item.normalizedUrl, packageName)) {
             return TimedDecision(
                 InviteScanDecision(
@@ -331,7 +335,7 @@ object ScanController {
         }
 
         _state.value = _state.value.copy(status = ScanEngineStatus.CLASSIFYING, message = "تحليل شاشة الدعوة")
-        val deadline = SystemClock.uptimeMillis() + speed.previewTimeoutMs
+        var deadline = SystemClock.uptimeMillis() + speed.previewTimeoutMs
         var last = InviteScanDecision(ScanStatus.UNKNOWN, "بانتظار ظهور حالة الدعوة", false, 0, "WAITING")
         var stableSignature = 0
         var stableRounds = 0
@@ -340,9 +344,41 @@ object ScanController {
             ScanSpeedProfile.ADAPTIVE -> 4
             ScanSpeedProfile.SAFE -> 6
         }
+        // Even a strong Join/Request/Expired label passes through a short stability gate. This
+        // prevents one transient accessibility mutation from becoming the committed result while
+        // still allowing clear cases to finish far below the 5.6s adaptive ceiling.
+        val definitiveStableThreshold = when (speed) {
+            ScanSpeedProfile.HYPER -> 1
+            ScanSpeedProfile.ADAPTIVE -> 2
+            ScanSpeedProfile.SAFE -> 3
+        }
+        var definitiveSignature = 0
+        var definitiveRounds = 0
+        var definitiveCandidate: InviteScanDecision? = null
 
         while (SystemClock.uptimeMillis() < deadline) {
             waitIfPaused()
+            if (!isNetworkAvailable()) {
+                _state.value = _state.value.copy(
+                    status = ScanEngineStatus.WAITING_NETWORK,
+                    message = "انقطع الاتصال — حفظ الرابط الحالي وانتظار رجوع الإنترنت"
+                )
+                awaitNetworkAvailability()
+                // Re-process the exact same URL after connectivity returns. No result is committed
+                // and the queue index is not advanced while the connection is unavailable.
+                safelyReturnFromInvite(speed)
+                if (!openInvite(item.normalizedUrl, packageName)) {
+                    return TimedDecision(
+                        InviteScanDecision(ScanStatus.ERROR, "عاد الاتصال لكن تعذر إعادة فتح نفس الرابط", true, 100, "REOPEN_FAILED"),
+                        SystemClock.uptimeMillis() - started
+                    )
+                }
+                stableSignature = 0
+                stableRounds = 0
+                last = InviteScanDecision(ScanStatus.UNKNOWN, "إعادة قراءة الرابط بعد عودة الاتصال", false, 0, "WAITING")
+                deadline = SystemClock.uptimeMillis() + speed.previewTimeoutMs
+                _state.value = _state.value.copy(status = ScanEngineStatus.CLASSIFYING, message = "عاد الاتصال — إعادة تحليل نفس الرابط")
+            }
             val root = service?.currentRoot()
             if (root != null && adapter.isWhatsAppRoot(root, packageName)) {
                 val snap = adapter.snapshot(root)
@@ -350,7 +386,23 @@ object ScanController {
                 last = chooseBetter(last, decision)
                 _state.value = _state.value.copy(currentConfidence = last.confidence)
                 if (decision.definitive) {
-                    return TimedDecision(decision, SystemClock.uptimeMillis() - started)
+                    val sameFact = definitiveCandidate?.status == decision.status &&
+                        definitiveCandidate?.groupName == decision.groupName &&
+                        definitiveCandidate?.inviteKind == decision.inviteKind
+                    if (sameFact && snap.signature != 0 && snap.signature == definitiveSignature) {
+                        definitiveRounds++
+                    } else {
+                        definitiveCandidate = decision
+                        definitiveSignature = snap.signature
+                        definitiveRounds = 0
+                    }
+                    if (definitiveRounds >= definitiveStableThreshold) {
+                        return TimedDecision(definitiveCandidate ?: decision, SystemClock.uptimeMillis() - started)
+                    }
+                } else {
+                    definitiveCandidate = null
+                    definitiveSignature = 0
+                    definitiveRounds = 0
                 }
 
                 if (snap.signature != 0 && snap.signature == stableSignature) {
@@ -400,6 +452,27 @@ object ScanController {
             if (!WhatsAppInstanceRegistry.isSupportedPackage(pkg)) return
             svc.performBack()
             delay(speed.settleDelayMs + 25L)
+        }
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private suspend fun awaitNetworkAvailability() {
+        while (!isNetworkAvailable()) {
+            waitIfPaused()
+            _state.value = _state.value.copy(
+                status = ScanEngineStatus.WAITING_NETWORK,
+                running = true,
+                message = "لا يوجد اتصال إنترنت — لن يتم تصنيف الرابط كتالف، بانتظار الشبكة"
+            )
+            notifier.show(_state.value)
+            delay(650L)
         }
     }
 

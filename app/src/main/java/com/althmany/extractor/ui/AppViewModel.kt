@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.althmany.extractor.ExtractorApp
 import com.althmany.extractor.data.ExtractionMode
 import com.althmany.extractor.data.LinkRecord
+import com.althmany.extractor.data.GroupSelectionPreset
 import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.data.ScanRecord
 import com.althmany.extractor.data.TargetGroup
+import com.althmany.extractor.data.PublishContentMode
 import com.althmany.extractor.data.PublishItem
 import com.althmany.extractor.engine.ExtractionController
 import com.althmany.extractor.engine.ExtractionUiState
@@ -130,6 +132,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun applyGroupSelectionPreset(preset: GroupSelectionPreset) {
+        viewModelScope.launch {
+            repo.setSelectionPreset(preset)
+            _groups.value = repo.groups()
+            ExtractionController.refreshStats()
+            _message.value = preset.labelAr
+        }
+    }
+
     fun addScanLinks(text: String) {
         viewModelScope.launch {
             val added = repo.addScanLinksFromText(text)
@@ -172,6 +183,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setPublishSpeed(value: PublishSpeedProfile) = PublishController.setSpeed(value)
     fun setPublishMaxAttempts(value: Int) = PublishController.setMaxAttempts(value)
     fun setPublishDraft(value: String) = PublishController.setDraft(value)
+    fun setPublishContentMode(value: PublishContentMode) = PublishController.setContentMode(value)
+    fun setPublishAttachment(uri: String?, mime: String?) = PublishController.setAttachment(uri, mime)
     fun reloadPublishItems() {
         viewModelScope.launch {
             val runId = PublishController.state.value.activeRunId

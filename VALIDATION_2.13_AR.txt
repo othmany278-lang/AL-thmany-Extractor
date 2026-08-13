@@ -1,0 +1,76 @@
+AL-thmany Extractor 2.13.0 Native Parity — Validation Report
+Generated: 2026-08-13
+
+== Source contract ==
+PASS: AGP 8.13.2
+PASS: Kotlin 2.3.21
+PASS: compileSdk 36
+PASS: targetSdk 36
+PASS: versionCode 2130
+PASS: versionName 2.13.0
+PASS: Compose API36 BOM
+PASS: modern compilerOptions
+PASS: Known Compose weight import fixed
+PASS: Extraction UI retained
+PASS: Scan UI retained
+PASS: Publish UI retained
+PASS: Neon real UI retained
+PASS: Real WhatsApp open action
+PASS: Real engine actions retained
+PASS: Group selection presets
+PASS: Detailed group sync metadata
+PASS: Sync restores chat-list position
+PASS: Deep extraction interleaved capture
+PASS: Strict extraction end proof
+PASS: Checkpoint before next group
+PASS: Android URL multi-surface capture
+PASS: Link normalization/categories
+PASS: Batch link persistence
+PASS: Batch scan import
+PASS: Scan connectivity guard
+PASS: Scan same-link reopen after network
+PASS: Scan stable result gate
+PASS: Scan adaptive ceiling 5.6s
+PASS: Scanner never joins
+PASS: Publish content modes
+PASS: Publish native Android share path
+PASS: Publish round-robin multi text
+PASS: Publish contact-text formatter
+PASS: Image caption share hint
+PASS: Publish run token
+PASS: Publish uncertain duplicate guard
+PASS: Truthful Turbo 1.0s
+PASS: Publish attachment picker wired
+PASS: Shared group database capability flags
+PASS: SQLite DB v8
+PASS: Extractor/Scan/Publish event backpressure
+PASS: Active-engine event routing
+PASS: Runtime bridge live instance
+PASS: 95ms fallback poll
+PASS: WhatsApp-first activation
+PASS: Adaptive chat rows
+PASS: SQLite WAL tuning
+PASS: No backup
+PASS: No cleartext traffic
+PASS: Workflow artifact v2.13
+
+AL-thmany Extractor 2.13.0 Native Parity source contract: PASS
+
+== Pure checks ==
+AL-thmany v2.13 pure engine/profile checks: PASS
+PureScanChecks v2.13: PASS
+PurePublishChecks v2.13: OK
+PureRuntimeChecks: OK
+
+ALL PURE CHECKS: PASS
+
+== Parser probes ==
+Screens.kt: no parser-level syntax error detected (Android/Compose classpath not available locally).
+ExtractionController.kt: no parser-level syntax error detected.
+WhatsAppUiAdapter.kt: no parser-level syntax error detected.
+PublishController.kt: no parser-level syntax error detected.
+ScanController.kt: no parser-level syntax error detected.
+
+IMPORTANT: A full Android Gradle compile was not executed in this container because Android Gradle/SDK is not installed here. GitHub Actions remains the authoritative compile/build check.
+Known previous compile issue fixed: removed import androidx.compose.foundation.layout.weight.
+Shizuku backend: not included in 2.13.0; this release uses Accessibility + Android native intents/actions.

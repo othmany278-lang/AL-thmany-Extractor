@@ -11,6 +11,7 @@ import com.althmany.extractor.data.ExtractionMode
 import com.althmany.extractor.data.ExtractionPreferences
 import com.althmany.extractor.data.ExtractorRepository
 import com.althmany.extractor.data.GroupCheckpoint
+import com.althmany.extractor.data.GroupSyncCandidate
 import com.althmany.extractor.data.GroupStatus
 import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.data.TargetGroup
@@ -301,7 +302,8 @@ object ExtractionController {
             awaitUiChange(timing.searchOpenMs)
         }
 
-        val found = linkedSetOf<String>()
+        val found = linkedMapOf<String, GroupSyncCandidate>()
+        val initialVisibleNames = adapter.collectChatListCandidates(svc.currentRoot()).take(8).toSet()
 
         // Archived is normally reachable near the top of the main chat list, so scan it before the
         // main list is moved toward its end. Then return and continue with the normal chat list.
@@ -313,8 +315,9 @@ object ExtractionController {
             awaitUiChange(timing.searchOpenMs)
         }
         scanConversationList(svc, timing, found)
-        val added = repository.addDiscoveredGroups(found)
-        repository.log(null, "INFO", "sync-complete", "اكتشفت ${found.size} اسمًا، جديد منها $added")
+        restoreConversationListPosition(svc, timing, initialVisibleNames)
+        val added = repository.addDiscoveredGroupCandidates(found.values)
+        repository.log(null, "INFO", "sync-complete", "اكتشفت ${found.size} محادثة مرشحة، جديد منها $added")
         _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت المزامنة: ${found.size}", syncFound = found.size)
         refreshStats()
         return added
@@ -326,7 +329,7 @@ object ExtractionController {
     private suspend fun scanConversationList(
         svc: WhatsAppAccessibilityService,
         timing: TimingPolicy,
-        found: MutableSet<String>
+        found: MutableMap<String, GroupSyncCandidate>
     ) {
         var stableRounds = 0
         var lastSignature: Int? = null
@@ -340,8 +343,18 @@ object ExtractionController {
             }
             val snapshot = adapter.snapshot(root)
             val before = found.size
-            found.addAll(adapter.collectChatListCandidates(root))
-            _state.value = _state.value.copy(syncFound = found.size, message = "تم اكتشاف ${found.size} اسمًا — يجري الفحص")
+            adapter.collectChatListCandidatesDetailed(root).forEach { candidate ->
+                val key = candidate.name.lowercase()
+                val previous = found[key]
+                found[key] = if (previous == null) candidate else previous.copy(
+                    unreadCount = maxOf(previous.unreadCount, candidate.unreadCount),
+                    activityText = previous.activityText ?: candidate.activityText,
+                    active = previous.active || candidate.active,
+                    publishableHint = previous.publishableHint || candidate.publishableHint,
+                    communityParentHint = previous.communityParentHint || candidate.communityParentHint
+                )
+            }
+            _state.value = _state.value.copy(syncFound = found.size, message = "تمت مزامنة ${found.size} محادثة — قراءة القائمة مستمرة")
 
             stableRounds = if (snapshot.signature == lastSignature && before == found.size) stableRounds + 1 else 0
             lastSignature = snapshot.signature
@@ -350,6 +363,26 @@ object ExtractionController {
             val accepted = adapter.scrollChatListForward(root) || svc.swipeChatListForward(timing.gestureDurationMs)
             if (!accepted) stableRounds++
             awaitBurstWithoutSaving(timing)
+        }
+    }
+
+    private suspend fun restoreConversationListPosition(
+        svc: WhatsAppAccessibilityService,
+        timing: TimingPolicy,
+        initialVisibleNames: Set<String>
+    ) {
+        if (initialVisibleNames.isEmpty()) return
+        var quiet = 0
+        repeat(180) {
+            val root = svc.currentRoot() ?: return@repeat
+            val current = adapter.collectChatListCandidates(root)
+            if (current.count { it in initialVisibleNames } >= minOf(2, initialVisibleNames.size)) return
+            val before = adapter.snapshot(root).signature
+            val accepted = adapter.scrollChatListBackward(root) || svc.swipeChatListBackward(timing.gestureDurationMs)
+            awaitBurstWithoutSaving(timing)
+            val after = adapter.snapshot(svc.currentRoot()).signature
+            quiet = if (!accepted || before == after) quiet + 1 else 0
+            if (quiet >= 3) return
         }
     }
 
@@ -453,8 +486,17 @@ object ExtractionController {
             repository.updateStatus(group.id, GroupStatus.VERIFYING)
             _state.value = _state.value.copy(status = EngineStatus.VERIFYING_GROUP, message = "التحقق أن المحادثة قروب وليست محادثة خاصة")
             val verified = verifyAutoDiscoveredGroup(group, prefs)
-            if (!verified) throw NotAGroupException()
-            repository.markVerifiedGroup(group.id, true)
+            if (!verified) {
+                repository.updateGroupCapabilities(group.id, verified = false, active = group.active, publishable = false)
+                throw NotAGroupException()
+            }
+            repository.updateGroupCapabilities(
+                group.id,
+                verified = true,
+                active = true,
+                publishable = !group.communityParent,
+                communityParent = group.communityParent
+            )
         }
 
         repository.updateStatus(group.id, GroupStatus.EXTRACTING)

@@ -1,5 +1,6 @@
 package com.althmany.extractor.engine
 
+import com.althmany.extractor.data.LinkCategory
 import java.net.URI
 import java.util.Locale
 
@@ -37,8 +38,33 @@ object LinkExtractor {
         }
     }
 
+    fun category(raw: String): LinkCategory {
+        val normalized = normalize(raw)
+        val lower = normalized.lowercase(Locale.ROOT)
+        val host = runCatching { URI(normalized).host.orEmpty().lowercase(Locale.ROOT).removePrefix("www.") }.getOrDefault("")
+        return when {
+            lower.substringBefore('?').endsWith(".pdf") -> LinkCategory.PDF
+            host == "chat.whatsapp.com" || host.endsWith(".whatsapp.com") || host == "wa.me" -> LinkCategory.WHATSAPP
+            host == "t.me" || host == "telegram.me" || host.endsWith(".telegram.org") -> LinkCategory.TELEGRAM
+            host == "instagram.com" || host.endsWith(".instagram.com") -> LinkCategory.INSTAGRAM
+            host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.watch" -> LinkCategory.FACEBOOK
+            host == "google.com" || host.endsWith(".google.com") || host == "goo.gl" || host == "forms.gle" -> LinkCategory.GOOGLE
+            else -> LinkCategory.OTHER
+        }
+    }
+
     private fun sanitize(value: String): String {
         return value.trim()
+            .replace("&amp;", "&", ignoreCase = true)
+            .replace("&quot;", "\"", ignoreCase = true)
+            .replace("&#39;", "'", ignoreCase = true)
+            .replace("&lt;", "<", ignoreCase = true)
+            .replace("&gt;", ">", ignoreCase = true)
+            .replace("&nbsp;", "", ignoreCase = true)
+            .replace("\u200B", "")
+            .replace("\u200E", "")
+            .replace("\u200F", "")
+            .replace("\u2060", "")
             .trimEnd('.', ',', ';', ':', '!', '?', '،', '؛', '。')
             .trimEnd(')', ']', '}', '»', '”', '\'', '"')
     }

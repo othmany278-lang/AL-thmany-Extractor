@@ -35,6 +35,12 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                 last_error TEXT,
                 discovered INTEGER NOT NULL DEFAULT 0,
                 verified_group INTEGER NOT NULL DEFAULT 0,
+                unread_count INTEGER NOT NULL DEFAULT 0,
+                activity_text TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                publishable INTEGER NOT NULL DEFAULT 1,
+                community_parent INTEGER NOT NULL DEFAULT 0,
+                last_synced_at INTEGER,
                 last_completed_at INTEGER
             )
             """.trimIndent()
@@ -112,7 +118,11 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 delay_ms INTEGER NOT NULL DEFAULT 4000,
-                max_attempts INTEGER NOT NULL DEFAULT 2
+                max_attempts INTEGER NOT NULL DEFAULT 2,
+                content_mode TEXT NOT NULL DEFAULT 'SINGLE_TEXT',
+                attachment_uri TEXT,
+                attachment_mime TEXT,
+                run_token TEXT NOT NULL DEFAULT ''
             )
             """.trimIndent()
         )
@@ -142,6 +152,8 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         db.execSQL("CREATE INDEX idx_logs_time ON extraction_logs(timestamp)")
         db.execSQL("CREATE INDEX idx_logs_group ON extraction_logs(group_name)")
         db.execSQL("CREATE INDEX idx_groups_selected_status ON target_groups(selected,status,id)")
+        db.execSQL("CREATE INDEX idx_groups_unread ON target_groups(unread_count,id)")
+        db.execSQL("CREATE INDEX idx_groups_active ON target_groups(active,publishable,id)")
         db.execSQL("CREATE INDEX idx_scan_status_id ON scan_items(status,id)")
         db.execSQL("CREATE INDEX idx_publish_run_status_id ON publish_items(run_id,status,id)")
     }
@@ -246,6 +258,22 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
             runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_scan_status_id ON scan_items(status,id)") }
             runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_publish_run_status_id ON publish_items(run_id,status,id)") }
         }
+        if (oldVersion < 7) {
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN activity_text TEXT") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN active INTEGER NOT NULL DEFAULT 1") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN publishable INTEGER NOT NULL DEFAULT 1") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN community_parent INTEGER NOT NULL DEFAULT 0") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN last_synced_at INTEGER") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_unread ON target_groups(unread_count,id)") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_active ON target_groups(active,publishable,id)") }
+        }
+        if (oldVersion < 8) {
+            runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN content_mode TEXT NOT NULL DEFAULT 'SINGLE_TEXT'") }
+            runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN attachment_uri TEXT") }
+            runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN attachment_mime TEXT") }
+            runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN run_token TEXT NOT NULL DEFAULT ''") }
+        }
     }
 
     fun upsertGroupName(name: String, discovered: Boolean = false): Long {
@@ -294,21 +322,55 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         return added
     }
 
+    fun addDiscoveredGroupCandidates(candidates: Collection<GroupSyncCandidate>): Int {
+        var added = 0
+        val now = System.currentTimeMillis()
+        val deduped = candidates
+            .filter { it.name.isNotBlank() }
+            .distinctBy { it.name.trim().lowercase() }
+        writableDatabase.beginTransaction()
+        try {
+            deduped.forEach { candidate ->
+                val clean = candidate.name.trim()
+                val before = readableDatabase.rawQuery(
+                    "SELECT COUNT(*) FROM target_groups WHERE name=? COLLATE NOCASE", arrayOf(clean)
+                ).use { c -> c.moveToFirst(); c.getInt(0) }
+                upsertGroupName(clean, discovered = true)
+                writableDatabase.update(
+                    "target_groups",
+                    ContentValues().apply {
+                        put("unread_count", candidate.unreadCount.coerceAtLeast(0))
+                        if (candidate.activityText == null) putNull("activity_text") else put("activity_text", candidate.activityText.take(120))
+                        put("active", if (candidate.active) 1 else 0)
+                        put("publishable", if (candidate.publishableHint) 1 else 0)
+                        put("community_parent", if (candidate.communityParentHint) 1 else 0)
+                        put("last_synced_at", now)
+                    },
+                    "name=? COLLATE NOCASE",
+                    arrayOf(clean)
+                )
+                if (before == 0) added++
+            }
+            writableDatabase.setTransactionSuccessful()
+        } finally { writableDatabase.endTransaction() }
+        return added
+    }
+
     fun getGroups(): List<TargetGroup> = queryGroups(
-        "SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group FROM target_groups ORDER BY id",
+        "SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at FROM target_groups ORDER BY id",
         null
     )
 
     fun getSelectedGroups(): List<TargetGroup> = queryGroups(
         """
-        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group
+        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at
         FROM target_groups WHERE selected=1 ORDER BY id
         """.trimIndent(), null
     )
 
     fun getSelectedPendingGroups(): List<TargetGroup> = queryGroups(
         """
-        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group
+        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at
         FROM target_groups
         WHERE selected=1 AND status NOT IN ('COMPLETED','SKIPPED_NOT_GROUP')
         ORDER BY id
@@ -323,7 +385,11 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                         id = c.getLong(0), name = c.getString(1), selected = c.getInt(2) == 1,
                         status = runCatching { GroupStatus.valueOf(c.getString(3)) }.getOrDefault(GroupStatus.PENDING),
                         extractedCount = c.getInt(4), lastError = c.getString(5),
-                        discovered = c.getInt(6) == 1, verifiedGroup = c.getInt(7) == 1
+                        discovered = c.getInt(6) == 1, verifiedGroup = c.getInt(7) == 1,
+                        unreadCount = c.getInt(8), activityText = c.getString(9),
+                        active = c.getInt(10) == 1, publishable = c.getInt(11) == 1,
+                        communityParent = c.getInt(12) == 1,
+                        lastSyncedAt = if (c.isNull(13)) null else c.getLong(13)
                     )
                 )
             }
@@ -335,6 +401,35 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
 
     fun setAllGroupsSelected(selected: Boolean) {
         writableDatabase.update("target_groups", ContentValues().apply { put("selected", if (selected) 1 else 0) }, null, null)
+    }
+
+    fun setSelectionPreset(preset: GroupSelectionPreset) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            when (preset) {
+                GroupSelectionPreset.ALL -> db.execSQL("UPDATE target_groups SET selected=1")
+                GroupSelectionPreset.NONE -> db.execSQL("UPDATE target_groups SET selected=0")
+                GroupSelectionPreset.UNREAD -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN unread_count>0 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.ACTIVE -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN active=1 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.PUBLISHABLE -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN publishable=1 AND community_parent=0 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.UNVERIFIED -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN verified_group=0 THEN 1 ELSE 0 END")
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun updateGroupCapabilities(id: Long, verified: Boolean, active: Boolean, publishable: Boolean, communityParent: Boolean = false) {
+        writableDatabase.update(
+            "target_groups",
+            ContentValues().apply {
+                put("verified_group", if (verified) 1 else 0)
+                put("active", if (active) 1 else 0)
+                put("publishable", if (publishable) 1 else 0)
+                put("community_parent", if (communityParent) 1 else 0)
+            },
+            "id=?", arrayOf(id.toString())
+        )
     }
 
     fun updateGroupStatus(id: Long, status: GroupStatus, error: String? = null) {
@@ -701,7 +796,11 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
             completedGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE selected=1 AND status='COMPLETED'"),
             failedGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE selected=1 AND status IN ('FAILED','FAILED_FINAL')"),
             totalUniqueLinks = scalar("SELECT COUNT(DISTINCT normalized_url) FROM extracted_links"),
-            totalOccurrences = scalar("SELECT COUNT(*) FROM extracted_links")
+            totalOccurrences = scalar("SELECT COUNT(*) FROM extracted_links"),
+            syncedGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE discovered=1"),
+            unreadGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE unread_count>0"),
+            activeGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE active=1"),
+            publishableGroups = scalar("SELECT COUNT(*) FROM target_groups WHERE publishable=1 AND community_parent=0")
         )
     }
 
@@ -709,7 +808,17 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         writableDatabase.execSQL("UPDATE publish_runs SET status='STOPPED', updated_at=? WHERE status IN ('RUNNING','PAUSED','ERROR')", arrayOf(System.currentTimeMillis()))
     }
 
-    fun createPublishRun(message: String, targetPackage: String, delayMs: Long, maxAttempts: Int, groupNames: List<String>): Long {
+    fun createPublishRun(
+        message: String,
+        targetPackage: String,
+        delayMs: Long,
+        maxAttempts: Int,
+        groupNames: List<String>,
+        contentMode: PublishContentMode,
+        attachmentUri: String?,
+        attachmentMime: String?,
+        runToken: String
+    ): Long {
         val now = System.currentTimeMillis()
         val db = writableDatabase
         db.beginTransaction()
@@ -722,6 +831,10 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                 put("updated_at", now)
                 put("delay_ms", delayMs)
                 put("max_attempts", maxAttempts)
+                put("content_mode", contentMode.name)
+                if (attachmentUri == null) putNull("attachment_uri") else put("attachment_uri", attachmentUri)
+                if (attachmentMime == null) putNull("attachment_mime") else put("attachment_mime", attachmentMime)
+                put("run_token", runToken)
             })
             groupNames.distinctBy { it.lowercase() }.forEach { group ->
                 db.insertWithOnConflict("publish_items", null, ContentValues().apply {
@@ -736,24 +849,28 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
     }
 
     fun getPublishRun(id: Long): PublishRun? = readableDatabase.rawQuery(
-        "SELECT id,message,target_package,status,created_at,updated_at,delay_ms,max_attempts FROM publish_runs WHERE id=? LIMIT 1",
+        "SELECT id,message,target_package,status,created_at,updated_at,delay_ms,max_attempts,content_mode,attachment_uri,attachment_mime,run_token FROM publish_runs WHERE id=? LIMIT 1",
         arrayOf(id.toString())
     ).use { c ->
         if (!c.moveToFirst()) null else PublishRun(
             c.getLong(0), c.getString(1), c.getString(2),
             runCatching { PublishRunStatus.valueOf(c.getString(3)) }.getOrDefault(PublishRunStatus.ERROR),
-            c.getLong(4), c.getLong(5), c.getLong(6), c.getInt(7)
+            c.getLong(4), c.getLong(5), c.getLong(6), c.getInt(7),
+            runCatching { PublishContentMode.valueOf(c.getString(8)) }.getOrDefault(PublishContentMode.SINGLE_TEXT),
+            c.getString(9), c.getString(10), c.getString(11).orEmpty()
         )
     }
 
     fun latestResumablePublishRun(): PublishRun? = readableDatabase.rawQuery(
-        "SELECT id,message,target_package,status,created_at,updated_at,delay_ms,max_attempts FROM publish_runs WHERE status IN ('RUNNING','PAUSED','ERROR') ORDER BY id DESC LIMIT 1",
+        "SELECT id,message,target_package,status,created_at,updated_at,delay_ms,max_attempts,content_mode,attachment_uri,attachment_mime,run_token FROM publish_runs WHERE status IN ('RUNNING','PAUSED','ERROR') ORDER BY id DESC LIMIT 1",
         null
     ).use { c ->
         if (!c.moveToFirst()) null else PublishRun(
             c.getLong(0), c.getString(1), c.getString(2),
             runCatching { PublishRunStatus.valueOf(c.getString(3)) }.getOrDefault(PublishRunStatus.ERROR),
-            c.getLong(4), c.getLong(5), c.getLong(6), c.getInt(7)
+            c.getLong(4), c.getLong(5), c.getLong(6), c.getInt(7),
+            runCatching { PublishContentMode.valueOf(c.getString(8)) }.getOrDefault(PublishContentMode.SINGLE_TEXT),
+            c.getString(9), c.getString(10), c.getString(11).orEmpty()
         )
     }
 
@@ -771,7 +888,7 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
     }
 
     fun getPendingPublishItems(runId: Long): List<PublishItem> = readableDatabase.rawQuery(
-        "SELECT id,run_id,group_name,status,detail,attempts,sent_at,verified FROM publish_items WHERE run_id=? AND status NOT IN ('SENT','VERIFIED','SKIPPED') ORDER BY id",
+        "SELECT id,run_id,group_name,status,detail,attempts,sent_at,verified FROM publish_items WHERE run_id=? AND status NOT IN ('SENT','VERIFIED','UNCERTAIN','SKIPPED') ORDER BY id",
         arrayOf(runId.toString())
     ).use { c ->
         buildList {
@@ -809,7 +926,7 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         // SENDING is deliberately not retried after a process interruption. The send click may have
         // reached WhatsApp even though our process died before verification; retrying could duplicate.
         writableDatabase.execSQL(
-            "UPDATE publish_items SET status='SKIPPED', detail='حالة الإرسال غير محسومة بعد انقطاع؛ لم تتم إعادة الإرسال لمنع التكرار' WHERE run_id=? AND status='SENDING'",
+            "UPDATE publish_items SET status='UNCERTAIN', detail='حالة الإرسال غير محسومة بعد انقطاع؛ لم تتم إعادة الإرسال تلقائيًا لمنع التكرار' WHERE run_id=? AND status='SENDING'",
             arrayOf(runId)
         )
     }
@@ -824,8 +941,9 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         val verified = counts[PublishStatus.VERIFIED.name] ?: 0
         val failed = counts[PublishStatus.FAILED.name] ?: 0
         val skipped = counts[PublishStatus.SKIPPED.name] ?: 0
-        val pending = (total - sent - verified - failed - skipped).coerceAtLeast(0)
-        return PublishStats(total, pending, sent, verified, failed, skipped)
+        val uncertain = counts[PublishStatus.UNCERTAIN.name] ?: 0
+        val pending = (total - sent - verified - failed - skipped - uncertain).coerceAtLeast(0)
+        return PublishStats(total, pending, sent, verified, failed, skipped, uncertain)
     }
 
     fun clearPublishHistory() {
@@ -839,6 +957,6 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
 
     companion object {
         private const val DB_NAME = "althmany_extractor.db"
-        private const val DB_VERSION = 6
+        private const val DB_VERSION = 8
     }
 }

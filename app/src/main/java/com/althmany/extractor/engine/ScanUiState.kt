@@ -2,11 +2,11 @@ package com.althmany.extractor.engine
 
 import com.althmany.extractor.data.ScanStats
 
-enum class ScanEngineStatus { IDLE, PREPARING, OPENING, CLASSIFYING, RETRYING, PAUSED, COMPLETED, STOPPED, ERROR }
+enum class ScanEngineStatus { IDLE, PREPARING, WAITING_NETWORK, OPENING, CLASSIFYING, RETRYING, PAUSED, COMPLETED, STOPPED, ERROR }
 
 enum class ScanSpeedProfile(val labelAr: String, val previewTimeoutMs: Long, val eventWaitMs: Long, val settleDelayMs: Long) {
-    HYPER("فائق", 3_000L, 65L, 14L),
-    ADAPTIVE("ذكي", 4_800L, 105L, 24L),
+    HYPER("فائق", 3_500L, 65L, 14L),
+    ADAPTIVE("ذكي", 5_600L, 105L, 24L),
     SAFE("دقيق", 8_000L, 190L, 50L)
 }
 

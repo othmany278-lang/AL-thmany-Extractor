@@ -80,6 +80,9 @@ import androidx.compose.ui.unit.dp
 import com.althmany.extractor.data.EngineStatus
 import com.althmany.extractor.data.ExtractionMode
 import com.althmany.extractor.data.LinkRecord
+import com.althmany.extractor.data.LinkCategory
+import com.althmany.extractor.data.GroupSelectionPreset
+import com.althmany.extractor.data.PublishContentMode
 import com.althmany.extractor.data.PublishItem
 import com.althmany.extractor.data.PublishStatus
 import com.althmany.extractor.data.ScanRecord
@@ -87,6 +90,7 @@ import com.althmany.extractor.data.ScanStatus
 import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.data.TargetGroup
 import com.althmany.extractor.engine.ExtractionUiState
+import com.althmany.extractor.engine.LinkExtractor
 import com.althmany.extractor.engine.PublishSpeedProfile
 import com.althmany.extractor.engine.PublishUiState
 import com.althmany.extractor.engine.ScanScope
@@ -609,8 +613,7 @@ fun GroupsScreen(
     groups: List<TargetGroup>,
     onAddGroups: (String) -> Unit,
     onSelected: (Long, Boolean) -> Unit,
-    onSelectAll: () -> Unit,
-    onClearSelection: () -> Unit,
+    onPreset: (GroupSelectionPreset) -> Unit,
     onStart: () -> Unit,
     syncing: Boolean,
     syncFound: Int,
@@ -618,67 +621,148 @@ fun GroupsScreen(
 ) {
     var showAdd by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(groups, query) {
+        if (query.isBlank()) groups else groups.filter { it.name.contains(query.trim(), ignoreCase = true) }
+    }
+    val selectedCount = groups.count { it.selected }
+    val unreadCount = groups.count { it.unreadCount > 0 }
+    val activeCount = groups.count { it.active }
+    val publishableCount = groups.count { it.publishable && !it.communityParent }
 
-    Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.weight(1f)) {
-                Text("اختيار المجموعات", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("أدخل اسم كل مجموعة كما يظهر في واتساب")
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(screenBrush())
+            .padding(padding)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(top = 16.dp, bottom = 26.dp)
+    ) {
+        item {
+            ScreenHeader("مزامنة واختيار القروبات")
+        }
+        item {
+            NeonCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NeonSectionTitle("القروبات الموجودة في واتساب") { Icon(Icons.Default.Sync, null, tint = NeonGreen) }
+                    Text(
+                        "اختر نسخة واتساب من شاشة الاستخراج أولاً، ثم اضغط مزامنة. التطبيق يقرأ قائمة الدردشات تدريجيًا ويجمع الأسماء والحالة الظاهرة بدون فتح كل محادثة.",
+                        color = SoftText,
+                        textAlign = TextAlign.End,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    NeonActionButton(
+                        text = if (syncing) "جارٍ المزامنة… $syncFound" else "مزامنة القروبات من واتساب الحقيقي",
+                        enabled = !syncing,
+                        icon = { Icon(Icons.Default.Sync, null, tint = Color.White) },
+                        onClick = onSync
+                    )
+                }
             }
-            IconButton(onClick = { showAdd = true }) { Icon(Icons.Default.Add, "إضافة") }
         }
-        Spacer(Modifier.height(10.dp))
-        FilledTonalButton(onClick = onSync, enabled = !syncing, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.Sync, null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (syncing) "مزامنة واتساب… $syncFound" else "مزامنة أسماء المحادثات من واتساب")
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                MetricCard("المزامنة", groups.size.toString(), Modifier.weight(1f), NeonCyan)
+                MetricCard("المحدد", selectedCount.toString(), Modifier.weight(1f), NeonGreen)
+                MetricCard("غير مقروء", unreadCount.toString(), Modifier.weight(1f), Warning)
+                MetricCard("قابل للنشر", publishableCount.toString(), Modifier.weight(1f), NeonGreen)
+            }
         }
-        Text(
-            "المزامنة التلقائية تحفظ الأسماء كمرشحين؛ قبل استخراج أي اسم مكتشف تلقائيًا يتحقق التطبيق أنه قروب فعلاً.",
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(onClick = onSelectAll, label = { Text("تحديد الكل") })
-            AssistChip(onClick = onClearSelection, label = { Text("إلغاء التحديد") })
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it.take(120) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("بحث باسم القروب") },
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NeonGreen,
+                    unfocusedBorderColor = NeonBorder,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                )
+            )
         }
-        Spacer(Modifier.height(8.dp))
-
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(groups, key = { it.id }) { group ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = group.selected, onCheckedChange = { onSelected(group.id, it) })
-                        Column(Modifier.weight(1f)) {
-                            Text(group.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("الحالة: ${group.status.name} • روابط: ${group.extractedCount}", style = MaterialTheme.typography.bodySmall)
-                            if (group.discovered) Text(
-                                if (group.verifiedGroup) "مزامن تلقائيًا • قروب مؤكّد" else "مزامن تلقائيًا • بانتظار التحقق",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
+        item {
+            NeonCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("التحديد السريع", fontWeight = FontWeight.Bold, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(GroupSelectionPreset.entries) { preset ->
+                            AssistChip(
+                                onClick = { onPreset(preset) },
+                                label = { Text(preset.labelAr) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = NeonPanel,
+                                    labelColor = Color.White
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (preset == GroupSelectionPreset.UNREAD) Warning else NeonBorder
+                                )
                             )
-                            group.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                         }
+                    }
+                    Text(
+                        "النشطة: $activeCount • غير المؤكدة: ${groups.count { !it.verifiedGroup }}",
+                        color = SoftText,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(
+                    onClick = { showAdd = true },
+                    border = BorderStroke(1.dp, NeonBorder),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonGreen)
+                ) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("إضافة اسم يدويًا")
+                }
+            }
+        }
+        items(filtered, key = { it.id }) { group ->
+            NeonCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = group.selected, onCheckedChange = { onSelected(group.id, it) })
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                        Text(group.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val chips = buildList {
+                            if (group.unreadCount > 0) add("غير مقروء ${group.unreadCount}")
+                            if (group.active) add("نشط") else add("غير نشط")
+                            if (group.publishable && !group.communityParent) add("قابل للنشر")
+                            if (group.communityParent) add("Community Parent")
+                            if (group.verifiedGroup) add("قروب مؤكّد") else add("بانتظار التحقق")
+                        }
+                        Text(chips.joinToString(" • "), color = if (group.verifiedGroup) NeonGreen else SoftText, style = MaterialTheme.typography.bodySmall)
+                        group.activityText?.let { Text("آخر نشاط ظاهر: $it", color = SoftText, style = MaterialTheme.typography.labelSmall) }
+                        Text("الحالة: ${group.status.name} • روابط: ${group.extractedCount}", color = SoftText, style = MaterialTheme.typography.labelSmall)
+                        group.lastError?.let { Text(it, color = Danger, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End) }
                     }
                 }
             }
         }
-
-        Button(
-            onClick = onStart,
-            enabled = groups.any { it.selected },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.PlayArrow, null)
-            Spacer(Modifier.width(8.dp))
-            Text("بدء الاستخراج")
+        item {
+            NeonActionButton(
+                text = if (selectedCount == 0) "حدد قروبًا واحدًا على الأقل" else "بدء الاستخراج من $selectedCount قروب",
+                enabled = selectedCount > 0 && !syncing,
+                icon = { Icon(Icons.Default.PlayArrow, null, tint = Color.White) },
+                onClick = onStart
+            )
         }
     }
 
     if (showAdd) {
         AlertDialog(
             onDismissRequest = { showAdd = false },
-            title = { Text("إضافة مجموعات") },
+            title = { Text("إضافة مجموعات يدويًا") },
             text = {
                 OutlinedTextField(
                     value = input,
@@ -710,10 +794,13 @@ fun ResultsScreen(
 ) {
     val clipboard = LocalClipboardManager.current
     var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf<LinkCategory?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
-    val filtered = remember(links, query) {
-        if (query.isBlank()) links else links.filter {
-            it.url.contains(query, ignoreCase = true) || it.groupName.contains(query, ignoreCase = true)
+    val filtered = remember(links, query, category) {
+        links.filter { link ->
+            val textMatch = query.isBlank() || link.url.contains(query, ignoreCase = true) || link.groupName.contains(query, ignoreCase = true)
+            val categoryMatch = category == null || LinkExtractor.category(link.normalizedUrl) == category
+            textMatch && categoryMatch
         }
     }
 
@@ -738,6 +825,29 @@ fun ResultsScreen(
             singleLine = true
         )
         Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            item {
+                AssistChip(
+                    onClick = { category = null },
+                    label = { Text("الكل") },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (category == null) NeonGreen.copy(alpha = 0.15f) else NeonPanel,
+                        labelColor = if (category == null) NeonGreen else Color.White
+                    )
+                )
+            }
+            items(LinkCategory.entries) { linkCategory ->
+                AssistChip(
+                    onClick = { category = linkCategory },
+                    label = { Text(linkCategory.labelAr) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (category == linkCategory) NeonGreen.copy(alpha = 0.15f) else NeonPanel,
+                        labelColor = if (category == linkCategory) NeonGreen else Color.White
+                    )
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ExportFormat.entries.forEach { format ->
                 AssistChip(
@@ -756,6 +866,7 @@ fun ResultsScreen(
                         Text(link.url, color = MaterialTheme.colorScheme.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(4.dp))
                         Text(link.groupName, fontWeight = FontWeight.SemiBold)
+                        Text("النوع: ${LinkExtractor.category(link.normalizedUrl).labelAr}", color = SoftText, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -1076,6 +1187,9 @@ fun PublishScreen(
     onGroups: () -> Unit,
     onTargetWhatsApp: (String) -> Unit,
     onDraftChanged: (String) -> Unit,
+    onContentMode: (PublishContentMode) -> Unit,
+    onPickAttachment: (PublishContentMode) -> Unit,
+    onClearAttachment: () -> Unit,
     onSpeed: (PublishSpeedProfile) -> Unit,
     onMaxAttempts: (Int) -> Unit,
     onStart: (String) -> Unit,
@@ -1091,6 +1205,11 @@ fun PublishScreen(
     var confirmClear by remember { mutableStateOf(false) }
     val running = publish.running
     val runtimeReady = accessibilityEnabled && publish.serviceConnected
+    val contentReady = when (publish.contentMode) {
+        PublishContentMode.VCF -> !publish.attachmentUri.isNullOrBlank()
+        PublishContentMode.VCF_WITH_TEXT, PublishContentMode.IMAGE_WITH_CAPTION -> draft.isNotBlank() && !publish.attachmentUri.isNullOrBlank()
+        else -> draft.isNotBlank()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(screenBrush()).padding(padding).padding(horizontal = 16.dp),
@@ -1124,16 +1243,77 @@ fun PublishScreen(
         item {
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NeonSectionTitle("رسالة النشر") { Icon(Icons.Default.Send, null, tint = Color.White) }
+                    NeonSectionTitle("نوع النشر") { Icon(Icons.Default.Send, null, tint = NeonGreen) }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(PublishContentMode.entries) { mode ->
+                            ChoicePill(
+                                label = mode.labelAr,
+                                selected = publish.contentMode == mode,
+                                enabled = !running,
+                                modifier = Modifier.width(150.dp),
+                                onClick = { onContentMode(mode) }
+                            )
+                        }
+                    }
+                    if (publish.contentMode.attachmentRequired) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { onPickAttachment(publish.contentMode) },
+                                enabled = !running,
+                                modifier = Modifier.weight(1f),
+                                border = BorderStroke(1.dp, NeonGreen),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonGreen)
+                            ) {
+                                Icon(Icons.Default.Add, null)
+                                Spacer(Modifier.width(5.dp))
+                                Text(if (publish.attachmentUri == null) "اختيار ملف" else "تغيير الملف")
+                            }
+                            OutlinedButton(
+                                onClick = onClearAttachment,
+                                enabled = !running && publish.attachmentUri != null,
+                                modifier = Modifier.weight(1f),
+                                border = BorderStroke(1.dp, NeonBorder),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = SoftText)
+                            ) { Text("إزالة المرفق") }
+                        }
+                        Text(
+                            publish.attachmentUri?.let { "المرفق جاهز • ${publish.attachmentMime.orEmpty()}" } ?: "لم يتم اختيار مرفق بعد",
+                            color = if (publish.attachmentUri == null) Warning else NeonGreen,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    when (publish.contentMode) {
+                        PublishContentMode.MULTI_TEXT -> Text("افصل الرسائل بسطر يحتوي --- وسيتم توزيعها دائريًا على القروبات.", color = SoftText, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+                        PublishContentMode.CONTACT_TEXT -> Text("اكتب كل جهة اتصال بسطر: الاسم | الرقم، وسيتم تنسيقها تلقائيًا كنص.", color = SoftText, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+                        else -> Unit
+                    }
+                }
+            }
+        }
+
+        item {
+            NeonCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    NeonSectionTitle(if (publish.contentMode == PublishContentMode.IMAGE_WITH_CAPTION) "التعليق" else "محتوى النشر") { Icon(Icons.Default.Send, null, tint = Color.White) }
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { value ->
-                            draft = value.take(8_000)
+                            draft = value.take(16_000)
                             onDraftChanged(draft)
                         },
                         enabled = !running,
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("اكتب رسالة النشر...") },
+                        placeholder = {
+                            Text(
+                                when (publish.contentMode) {
+                                    PublishContentMode.MULTI_TEXT -> "رسالة 1\n---\nرسالة 2\n---\nرسالة 3"
+                                    PublishContentMode.CONTACT_TEXT -> "أحمد | +9627xxxxxxx\nمحمد | +9677xxxxxxx"
+                                    else -> "اكتب محتوى النشر..."
+                                }
+                            )
+                        },
                         minLines = 7,
                         maxLines = 14,
                         shape = RoundedCornerShape(16.dp),
@@ -1147,7 +1327,7 @@ fun PublishScreen(
                         )
                     )
                     Row(Modifier.fillMaxWidth()) {
-                        Text("${draft.length} / 8000", color = if (draft.length > 7600) Warning else NeonGreen, style = MaterialTheme.typography.labelSmall)
+                        Text("${draft.length} / 16000", color = if (draft.length > 15000) Warning else NeonGreen, style = MaterialTheme.typography.labelSmall)
                         Spacer(Modifier.weight(1f))
                         Text("يتم النشر فقط في القروبات المحددة", color = SoftText, style = MaterialTheme.typography.labelSmall)
                     }
@@ -1180,6 +1360,7 @@ fun PublishScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 MetricCard("المحدد", engine.stats.totalGroups.toString(), Modifier.weight(1f), NeonCyan)
                 MetricCard("ناجح", (publish.stats.sent + publish.stats.verified).toString(), Modifier.weight(1f), NeonGreen)
+                MetricCard("غير محسوم", publish.stats.uncertain.toString(), Modifier.weight(1f), Warning)
                 MetricCard("فشل", publish.stats.failed.toString(), Modifier.weight(1f), Danger)
             }
         }
@@ -1190,6 +1371,8 @@ fun PublishScreen(
                     NeonSectionTitle("حالة النشر")
                     Text(publish.info, color = if (publish.running) NeonGreen else Color.White, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
                     publish.currentGroup?.let { Text("القروب الحالي: $it", color = SoftText) }
+                    publish.runToken?.takeIf { it.isNotBlank() }?.let { Text("Run Token: ${it.take(8)}…", color = SoftText, style = MaterialTheme.typography.labelSmall) }
+                    Text("الفاصل الفعلي: ${publish.speed.betweenGroupsMs}ms", color = NeonCyan, style = MaterialTheme.typography.labelSmall)
                     if (publish.total > 0) {
                         val progress = (publish.currentIndex.toFloat() / publish.total.toFloat()).coerceIn(0f, 1f)
                         LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(8.dp)), color = NeonGreen, trackColor = NeonBorder)
@@ -1208,7 +1391,7 @@ fun PublishScreen(
                 }
                 else -> NeonActionButton(
                     "معاينة وبدء النشر",
-                    enabled = draft.isNotBlank() && accessibilityEnabled && publish.serviceConnected && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
+                    enabled = contentReady && accessibilityEnabled && publish.serviceConnected && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
                     icon = { Icon(Icons.Default.Send, null, tint = Color.White) },
                     onClick = { confirmStart = true }
                 )
@@ -1237,7 +1420,11 @@ fun PublishScreen(
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.End) {
                     Text(item.groupName, fontWeight = FontWeight.Bold)
-                    Text(item.status.labelAr, color = if (item.status == PublishStatus.FAILED) Danger else NeonGreen, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        item.status.labelAr,
+                        color = when (item.status) { PublishStatus.FAILED -> Danger; PublishStatus.UNCERTAIN -> Warning; else -> NeonGreen },
+                        fontWeight = FontWeight.SemiBold
+                    )
                     item.detail?.let { Text(it, color = SoftText, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End) }
                     Text("المحاولات: ${item.attempts}${if (item.verified) " • تم التحقق" else ""}", color = SoftText, style = MaterialTheme.typography.labelSmall)
                 }
@@ -1251,9 +1438,10 @@ fun PublishScreen(
             title = { Text("تأكيد النشر") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("سيتم إرسال الرسالة إلى ${engine.stats.totalGroups} قروب محدد فقط.")
-                    Text(draft, maxLines = 8, overflow = TextOverflow.Ellipsis)
-                    Text("راجع القروبات والرسالة قبل المتابعة.", style = MaterialTheme.typography.bodySmall)
+                    Text("سيتم تشغيل ${publish.contentMode.labelAr} على القروبات المحددة والقابلة للنشر فقط.")
+                    if (draft.isNotBlank()) Text(draft, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                    if (publish.attachmentUri != null) Text("المرفق: ${publish.attachmentMime.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                    Text("الإرسال Single-Flight، وبعد أي إرسال غير محسوم لن تتم إعادة المحاولة تلقائيًا.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = { TextButton(onClick = { confirmStart = false; onStart(draft) }) { Text("بدء النشر") } },
