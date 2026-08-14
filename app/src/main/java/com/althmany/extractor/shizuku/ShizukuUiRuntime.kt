@@ -248,7 +248,7 @@ internal class ShizukuUiRuntime(private val context: Context) {
             .replace(Regex("[\u200E\u200F\u202A-\u202E\u2066-\u2069\uFE0E\uFE0F]"), "")
             .replace(Regex("[\u064B-\u065F\u0670\u06D6-\u06ED]"), "")
             .replace('ـ', ' ')
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
             .lowercase(Locale.ROOT)
     }
