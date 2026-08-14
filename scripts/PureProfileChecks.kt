@@ -17,5 +17,5 @@ fun main() {
 
     check(ProfileControlPolicy.classify(true, true, 10L, 10L, true) == ProfileControlCapability.READY)
     check(ProfileControlPolicy.classify(true, false, null, null, false) == ProfileControlCapability.SERVICE_NOT_CONNECTED_LOCALLY)
-    println("PureProfileChecks v2.15: PASS")
+    println("PureProfileChecks v2.17: PASS")
 }

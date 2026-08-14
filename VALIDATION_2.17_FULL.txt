@@ -1,0 +1,116 @@
+AL-thmany Extractor v2.17.0 — Full Validation
+==============================================
+[Source contract]
+PASS: AGP 8.13.2
+PASS: Kotlin 2.3.21
+PASS: compileSdk 36
+PASS: targetSdk 36
+PASS: versionCode 2170
+PASS: versionName 2.17.0
+PASS: Compose API36 BOM
+PASS: modern compilerOptions
+PASS: Known Compose weight import fixed
+PASS: Unified GroupRecord access metadata
+PASS: No AccessibilityNodeInfo persistence model
+PASS: SQLite group memory DB v11
+PASS: Unified package-scoped group database
+PASS: Legacy group row coalescing
+PASS: Package-scoped extraction queue
+PASS: Package-scoped selection presets
+PASS: Discovered groups start unselected
+PASS: Stale sync generation guard
+PASS: Old discovered garbage hidden on v11 migration
+PASS: Group-only WhatsApp filter sync
+PASS: Safe empty-sync preservation
+PASS: System UI labels excluded from group names
+PASS: Chat-list container scoped scanning
+PASS: Shared GroupAccessRouter
+PASS: Visible-list open without Search
+PASS: Groups filter prepared before route
+PASS: Bidirectional list match
+PASS: Post-click header verification
+PASS: Scroll + match before Search
+PASS: Search remains router-only fallback
+PASS: Extraction never types group names
+PASS: Structural chat confirmation
+PASS: Conversation-list bottom-nav recovery
+PASS: Shizuku normalized group matching
+PASS: No fake Android JID direct route
+PASS: Access success memory
+PASS: Access failure recovery memory
+PASS: Event-first extraction
+PASS: Interleaved extraction capture
+PASS: Strict end proof
+PASS: Extraction checkpoint
+PASS: Android URL multi-surface capture
+PASS: Rich link classifier
+PASS: Invite code extraction
+PASS: Link source group/package persistence
+PASS: Link source metadata export
+PASS: Scanner action modes
+PASS: Scanner mode UI
+PASS: Open-once scan action path
+PASS: Request-to-join explicit setting
+PASS: Join verified state
+PASS: Uncertain action duplicate guard
+PASS: Scan connectivity guard
+PASS: Scan stable result gate
+PASS: Scan adaptive ceiling 5.6s
+PASS: GroupRecord publish memory
+PASS: Publisher reuses GroupRecord
+PASS: Publisher package guard
+PASS: Publish run token
+PASS: Publish uncertain duplicate guard
+PASS: Truthful Turbo 1.0s
+PASS: Extractor/Scan/Publish event backpressure
+PASS: Active-engine event routing
+PASS: Runtime bridge live instance
+PASS: 95ms fallback poll
+PASS: SQLite WAL tuning
+PASS: No backup
+PASS: No cleartext traffic
+PASS: Profile-local identity key
+PASS: Work/Secure same-profile safety
+PASS: Profile-local Accessibility heartbeat
+PASS: AUTO backend router
+PASS: Shizuku API/provider 13.1.5
+PASS: Shizuku AIDL enabled
+PASS: Persistent Shizuku UiAutomation
+PASS: Shizuku probe-first bridge
+PASS: Shizuku extraction fallback
+PASS: Shizuku publish fallback
+PASS: Shizuku scan fallback
+PASS: Dynamic WhatsApp/clone discovery
+PASS: Vendor clone Accessibility events supported
+PASS: Dual Messenger matcher ported
+PASS: No legacy joiner service merged
+PASS: Workflow artifact v2.17.0
+PASS: Exact dashboard UI
+PASS: Hybrid backend UI start gating
+
+AL-thmany Extractor 2.17.0 Exact Dashboard + Root Fix source contract: PASS
+
+[Pure Kotlin checks]
+AL-thmany v2.17 pure engine/profile checks: PASS
+PureScanChecks v2.17: PASS
+PurePublishChecks v2.17: OK
+PureRuntimeChecks: OK
+PureProfileChecks v2.17: PASS
+
+ALL PURE CHECKS: PASS
+
+[XML parse]
+PASS: 5 Android XML files parsed
+
+[Kotlin structural smoke]
+PASS: app/src/main/java/com/althmany/extractor/MainActivity.kt brace-balanced
+PASS: app/src/main/java/com/althmany/extractor/ui/DashboardScreen.kt brace-balanced
+PASS: exact dashboard sections present
+PASS: Auto Join wired to Scan + Join
+
+[Root-fix invariants]
+PASS: extraction no-Search gate
+PASS: dashboard delay setting wired to engine
+PASS: retry setting wired to engine
+
+VALIDATION RESULT: PASS

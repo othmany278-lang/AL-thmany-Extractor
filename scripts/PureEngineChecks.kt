@@ -66,5 +66,5 @@ fun main() {
     checkThat(ProfileLaunchPolicy.isMismatch("com.whatsapp.w4b", "com.whatsapp"), "package mismatch guard failed")
     checkThat(!ProfileLaunchPolicy.isMismatch("com.whatsapp", "com.whatsapp"), "same package must not be mismatch")
 
-    println("AL-thmany v2.15 pure engine/profile checks: PASS")
+    println("AL-thmany v2.17 pure engine/profile checks: PASS")
 }

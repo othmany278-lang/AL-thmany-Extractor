@@ -46,6 +46,7 @@ root_build = read('build.gradle.kts')
 app_build = read('app/build.gradle.kts')
 manifest = read('app/src/main/AndroidManifest.xml')
 screens = read('app/src/main/java/com/althmany/extractor/ui/Screens.kt')
+dashboard = read('app/src/main/java/com/althmany/extractor/ui/DashboardScreen.kt')
 main = read('app/src/main/java/com/althmany/extractor/MainActivity.kt')
 models = read('app/src/main/java/com/althmany/extractor/data/Models.kt')
 scan_models = read('app/src/main/java/com/althmany/extractor/data/ScanModels.kt')
@@ -78,8 +79,8 @@ checks = {
     'Kotlin 2.3.21': root_build.count('version "2.3.21"') >= 2,
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
-    'versionCode 2150': 'versionCode = 2150' in app_build,
-    'versionName 2.15.0': 'versionName = "2.15.0"' in app_build,
+    'versionCode 2170': 'versionCode = 2170' in app_build,
+    'versionName 2.17.0': 'versionName = "2.17.0"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -111,7 +112,11 @@ checks = {
     'Bidirectional list match': 'forward = false' in router and 'scrollChatListBackward' in router,
     'Post-click header verification': 'verifyChatOpen' in router and 'Never start scrolling while an unverified chat is open' in router,
     'Scroll + match before Search': router.find('priority += GroupAccessMethod.SCROLL_MATCH') < router.find('priority += GroupAccessMethod.SEARCH_FALLBACK'),
-    'Search is late fallback': 'SEARCH_FALLBACK("Search كحل أخير")' in models and 'allowSearchFallback' in router,
+    'Search remains router-only fallback': 'SEARCH_FALLBACK("Search كحل أخير")' in models and 'allowSearchFallback' in router,
+    'Extraction never types group names': 'allowSearchFallback = false' in extract and 'بدون Search' in extract,
+    'Structural chat confirmation': 'isConversationOpenForTarget' in adapter and 'isConversationOpenForTarget' in extract,
+    'Conversation-list bottom-nav recovery': 'bottomNavLabels' in adapter and 'prevent' in adapter,
+    'Shizuku normalized group matching': 'normalizeGroupName' in shizuku_runtime and 'groupNamesEquivalent' in shizuku_runtime,
     'No fake Android JID direct route': 'does not expose an official stable JID-to-chat intent' in router and 'GroupAccessMethod.JID_DIRECT' in router,
     'Access success memory': 'recordGroupAccessSuccess' in repo and 'updateGroupAccessSuccess' in db,
     'Access failure recovery memory': 'recordGroupAccessFailure' in repo and 'updateGroupAccessFailure' in db,
@@ -165,7 +170,9 @@ checks = {
     'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
     'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
     'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
-    'Workflow artifact v2.15.0': 'HybridProfiles-2.15.0' in workflow,
+    'Workflow artifact v2.17.0': 'ExactDashboard-RootFix-2.17.0' in workflow,
+    'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
+    'Hybrid backend UI start gating': screens.count('runtimeReady &&') >= 3 and 'engine.shizukuReady' in screens,
 }
 
 for label, ok in checks.items():
@@ -186,4 +193,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.15.0 Hybrid Profiles source contract: PASS')
+print('\nAL-thmany Extractor 2.17.0 Exact Dashboard + Root Fix source contract: PASS')

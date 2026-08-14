@@ -75,7 +75,13 @@ object ExtractionController {
         settingsStore = ExtractionSettingsStore(appContext)
         notifier = ExtractionNotifier(appContext)
         val prefs = settingsStore.get()
-        _state.value = _state.value.copy(mode = prefs.mode, speed = prefs.speed, maxScrollIterations = prefs.maxScrollIterations)
+        _state.value = _state.value.copy(
+            mode = prefs.mode,
+            speed = prefs.speed,
+            maxScrollIterations = prefs.maxScrollIterations,
+            maxSameGroupRetries = prefs.maxSameGroupRetries,
+            betweenItemsDelayMs = prefs.betweenItemsDelayMs
+        )
         refreshRuntimeEnvironment()
         refreshStats()
     }
@@ -185,6 +191,18 @@ object ExtractionController {
         val safe = value.coerceIn(100, 10_000)
         settingsStore.setMaxScrollIterations(safe)
         _state.value = _state.value.copy(maxScrollIterations = safe)
+    }
+
+    fun setMaxSameGroupRetries(value: Int) {
+        val safe = value.coerceIn(1, 5)
+        settingsStore.setMaxSameGroupRetries(safe)
+        _state.value = _state.value.copy(maxSameGroupRetries = safe)
+    }
+
+    fun setBetweenItemsDelayMs(value: Long) {
+        val safe = value.coerceIn(0L, 60_000L)
+        settingsStore.setBetweenItemsDelayMs(safe)
+        _state.value = _state.value.copy(betweenItemsDelayMs = safe)
     }
 
     fun isBusy(): Boolean = runJob?.isActive == true || stateStore.active
@@ -490,7 +508,13 @@ object ExtractionController {
             allowIncompleteCheckpointResume = !resetRun
             val prefs = settingsStore.get()
             val targetPackage = prefs.targetWhatsAppPackage ?: requireSelectedPackage()
-            _state.value = _state.value.copy(mode = prefs.mode, speed = prefs.speed, maxScrollIterations = prefs.maxScrollIterations)
+            _state.value = _state.value.copy(
+                mode = prefs.mode,
+                speed = prefs.speed,
+                maxScrollIterations = prefs.maxScrollIterations,
+                maxSameGroupRetries = prefs.maxSameGroupRetries,
+                betweenItemsDelayMs = prefs.betweenItemsDelayMs
+            )
             if (resetRun) repository.resetRunStatuses(targetPackage)
             var groups = repository.pendingSelectedGroups(targetPackage)
             if (groups.isEmpty()) {
@@ -540,6 +564,10 @@ object ExtractionController {
                 }
                 refreshStatsAndNotify()
                 returnToList(prefs)
+                if (index < groups.lastIndex && prefs.betweenItemsDelayMs > 0L) {
+                    _state.value = _state.value.copy(phaseDetail = "فاصل ${prefs.betweenItemsDelayMs}ms قبل القروب التالي")
+                    delay(prefs.betweenItemsDelayMs)
+                }
             }
             finishRun("اكتمل الاستخراج")
         } catch (c: CancellationException) {
@@ -586,7 +614,7 @@ object ExtractionController {
         _state.value = _state.value.copy(status = EngineStatus.OPENING_GROUP, message = "فتح ${group.name} من ذاكرة القروبات")
         notifier.show(_state.value)
         val access = openGroupFromMemory(group, prefs)
-        if (!access.opened) error("تعذر فتح المجموعة عبر المسارات المحفوظة والـfallback")
+        if (!access.opened) error("تعذر فتح المجموعة من ذاكرة المزامنة بدون Search: ${access.detail}")
 
         if (group.discovered && !group.verifiedGroup) {
             repository.updateStatus(group.id, GroupStatus.VERIFYING)
@@ -660,7 +688,7 @@ object ExtractionController {
                 }
             },
             maxScrollPasses = 320,
-            allowSearchFallback = true
+            allowSearchFallback = false
         )
         if (result.opened) {
             repository.recordGroupAccessSuccess(group.id, result.method)
@@ -692,9 +720,9 @@ object ExtractionController {
                 if (adapter.openSearchResult(root, groupName)) {
                     _state.value = _state.value.copy(status = EngineStatus.OPENING_GROUP, message = "فتح المجموعة")
                     awaitUiChange(timing.groupOpenMs)
-                    if (adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
+                    if (adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
                     awaitUiChange(timing.eventQuietMs)
-                    if (adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
+                    if (adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
                 }
             }
             if (attempt < 2) { svc.performBack(); awaitUiChange(timing.searchOpenMs) }
@@ -712,7 +740,7 @@ object ExtractionController {
         awaitUiChange(timing.groupOpenMs)
         val isGroup = adapter.isGroupInfoScreen(svc.currentRoot())
         svc.performBack(); awaitUiChange(timing.searchOpenMs)
-        return isGroup && adapter.isGroupVisible(svc.currentRoot(), group.name, selectedPackageOrNull())
+        return isGroup && adapter.isConversationOpenForTarget(svc.currentRoot(), group.name, selectedPackageOrNull())
     }
 
     private suspend fun extractViaLinksTab(group: TargetGroup, prefs: ExtractionPreferences): Boolean {
@@ -791,9 +819,9 @@ object ExtractionController {
             val timing = if (fastForwardResume) timingTurbo else timingNormal
             val root = svc.currentRoot()
             if (root == null) { awaitUiChange(timing.eventQuietMs); continue }
-            if (!adapter.isGroupVisible(root, group.name, selectedPackageOrNull())) {
+            if (!adapter.isConversationOpenForTarget(root, group.name, selectedPackageOrNull())) {
                 awaitUiChange(timing.eventQuietMs)
-                if (!adapter.isGroupVisible(svc.currentRoot(), group.name, selectedPackageOrNull())) error("خرج واتساب من المجموعة أثناء الاستخراج")
+                if (!adapter.isConversationOpenForTarget(svc.currentRoot(), group.name, selectedPackageOrNull())) error("خرج واتساب من المجموعة أثناء الاستخراج")
             }
 
             val before = adapter.snapshot(root)
@@ -941,7 +969,7 @@ object ExtractionController {
         val svc = service ?: return false
         repeat(ExtractionPolicy.QUIET_END_PASSES) {
             val root = svc.currentRoot() ?: return false
-            if (!directionForward && !adapter.isGroupVisible(root, group.name, selectedPackageOrNull())) return false
+            if (!directionForward && !adapter.isConversationOpenForTarget(root, group.name, selectedPackageOrNull())) return false
             if (!directionForward && adapter.olderMessagesLoaderVisible(root)) return false
             adapter.detectTerminalBoundary(root)?.takeIf { it.structural }?.let { return true }
             val before = adapter.snapshot(root).contentSignature
@@ -951,7 +979,7 @@ object ExtractionController {
                 adapter.scrollToOlderMessages(root) || svc.swipeTowardOlderMessages(timing.gestureDurationMs)
             }
             val burst = captureBurst(group, seen, timing.copy(hardSettleMs = maxOf(timing.hardSettleMs, timing.endQuietMs)))
-            if (!directionForward && !adapter.isGroupVisible(svc.currentRoot(), group.name, selectedPackageOrNull())) return false
+            if (!directionForward && !adapter.isConversationOpenForTarget(svc.currentRoot(), group.name, selectedPackageOrNull())) return false
             if (accepted && burst.snapshot.contentSignature != before) return false
             if (burst.newLinks > 0) return false
         }
@@ -962,7 +990,7 @@ object ExtractionController {
         val svc = service ?: error("Accessibility service disconnected")
         val timing = ExtractionPolicy.timing(prefs.speed)
         repeat(4) {
-            if (adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) return
+            if (adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) return
             svc.performBack(); awaitUiChange(timing.searchOpenMs)
         }
         val record = repository.groupByName(groupName, selectedPackageOrNull()) ?: error("لم يعد سجل القروب موجودًا")
@@ -975,7 +1003,7 @@ object ExtractionController {
         // Typical Android path: Links/Media -> Group info -> Chat. Do not stop merely because
         // the group title is still visible on the nested info page.
         repeat(2) { svc.performBack(); awaitUiChange(timing.searchOpenMs) }
-        if (!adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) {
+        if (!adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) {
             repository.groupByName(groupName, selectedPackageOrNull())?.let { openGroupFromMemory(it, prefs) }
         }
     }
@@ -1100,12 +1128,12 @@ object ExtractionController {
             ?: throw IllegalStateException("Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile")
 
         for (attempt in 0 until 4) {
-            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) break
+            if (shizukuUi.isConversationListVisible(tree, packageName)) break
             shizukuUi.back()
             delay(timing.searchOpenMs.coerceAtMost(300L))
             tree = awaitShizukuTree(packageName, 1_000L) ?: tree
         }
-        if (shizukuUi.collectChatCandidates(tree, packageName).size < 2) {
+        if (!shizukuUi.isConversationListVisible(tree, packageName)) {
             throw IllegalStateException("Shizuku يرى واتساب لكن تعذر الوصول إلى قائمة الدردشات")
         }
 
@@ -1225,6 +1253,7 @@ object ExtractionController {
             }
             refreshStatsAndNotify()
             recoverShizukuToList(targetPackage, prefs)
+            if (index < groups.lastIndex && prefs.betweenItemsDelayMs > 0L) delay(prefs.betweenItemsDelayMs)
         }
         finishRun("اكتمل الاستخراج عبر Shizuku")
     }
@@ -1232,19 +1261,19 @@ object ExtractionController {
     private suspend fun openGroupViaShizuku(group: TargetGroup, prefs: ExtractionPreferences, packageName: String): Boolean {
         val timing = ExtractionPolicy.timing(prefs.speed)
         var tree = awaitShizukuTree(packageName, 1_200L) ?: return false
-        if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+        if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) {
             repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.CURRENT_CHAT)
             return true
         }
         for (attempt in 0 until 4) {
-            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) break
+            if (shizukuUi.isConversationListVisible(tree, packageName)) break
             shizukuUi.back()
             delay(timing.searchOpenMs.coerceAtMost(260L))
             tree = awaitShizukuTree(packageName, 900L) ?: tree
         }
         if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
             delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 1_000L) ?: tree
-            if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.VISIBLE_LIST); return true }
+            if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.VISIBLE_LIST); return true }
         }
 
         var sequence = shizukuUi.eventSequence(packageName)
@@ -1253,7 +1282,7 @@ object ExtractionController {
             tree = awaitShizukuTree(packageName, 700L) ?: continue
             if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
                 val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(40)); sequence = frame.first; tree = frame.second
-                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
+                if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
             }
             val before = tree.signature
             if (!shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())) stable++
@@ -1267,7 +1296,7 @@ object ExtractionController {
             tree = awaitShizukuTree(packageName, 700L) ?: continue
             if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
                 delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: tree
-                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
+                if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
             }
             val before = tree.signature
             val moved = shizukuUi.swipeListBackward(tree, timing.gestureDurationMs.toInt())
@@ -1278,20 +1307,9 @@ object ExtractionController {
             if (backwardStable >= 3) break
         }
 
-        // Search remains the final fallback, exactly like the Accessibility router.
-        tree = awaitShizukuTree(packageName, 900L) ?: return false
-        if (shizukuUi.clickSearch(tree, packageName)) {
-            delay(timing.searchOpenMs.coerceAtMost(250L))
-            if (shizukuUi.setSearchText(packageName, group.name)) {
-                delay(timing.searchResultMs.coerceAtMost(400L))
-                tree = awaitShizukuTree(packageName, 1_000L) ?: return false
-                if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
-                    delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: tree
-                    if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SEARCH_FALLBACK); return true }
-                }
-            }
-        }
-        repository.recordGroupAccessFailure(group.id, GroupAccessMethod.SEARCH_FALLBACK)
+        // Extraction 2.16: synced groups are opened only from cached/list routes.
+        // Never type the group name into WhatsApp Search during extraction.
+        repository.recordGroupAccessFailure(group.id, GroupAccessMethod.SCROLL_MATCH)
         return false
     }
 
@@ -1310,7 +1328,7 @@ object ExtractionController {
     private suspend fun extractDeepViaShizuku(group: TargetGroup, prefs: ExtractionPreferences, packageName: String) {
         val timing = ExtractionPolicy.timing(prefs.speed)
         var tree = awaitShizukuTree(packageName, 1_000L) ?: error("Shizuku UI root unavailable")
-        if (!shizukuUi.isGroupVisible(tree, group.name, packageName)) error("Shizuku خرج من القروب قبل الاستخراج")
+        if (!shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) error("Shizuku خرج من القروب قبل الاستخراج")
         val newest = shizukuUi.toNodeSnapshot(tree)
         val prior = repository.checkpoint(group.name)
         val previousNewAnchor = prior?.takeIf { it.completed && prefs.mode == ExtractionMode.NEW_ONLY }?.anchorTokens.orEmpty()
@@ -1324,7 +1342,7 @@ object ExtractionController {
 
         while (stateStore.active && iterations < prefs.maxScrollIterations) {
             awaitIfPaused()
-            if (!shizukuUi.isGroupVisible(tree, group.name, packageName)) error("Shizuku فقد محادثة القروب أثناء الاستخراج")
+            if (!shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) error("Shizuku فقد محادثة القروب أثناء الاستخراج")
             val before = shizukuUi.toNodeSnapshot(tree)
             val added = captureShizukuLinks(group, tree, seen)
             totalNew += added
@@ -1419,7 +1437,7 @@ object ExtractionController {
         val delayMs = ExtractionPolicy.timing(prefs.speed).searchOpenMs.coerceAtMost(220L)
         repeat(4) {
             val tree = awaitShizukuTree(packageName, 700L) ?: return@repeat
-            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) return
+            if (shizukuUi.isConversationListVisible(tree, packageName)) return
             shizukuUi.back(); delay(delayMs)
         }
     }

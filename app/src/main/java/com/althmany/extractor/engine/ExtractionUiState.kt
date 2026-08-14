@@ -29,6 +29,8 @@ data class ExtractionUiState(
     val mode: ExtractionMode = ExtractionMode.DEEP,
     val speed: SpeedProfile = SpeedProfile.ADAPTIVE,
     val maxScrollIterations: Int = 2_000,
+    val maxSameGroupRetries: Int = 3,
+    val betweenItemsDelayMs: Long = 0L,
     val retry: Int = 0,
     val syncFound: Int = 0,
     val phaseDetail: String = ""

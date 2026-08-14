@@ -99,7 +99,7 @@ import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.export.ExportFormat
 
 
-enum class AppScreen { HOME, SCAN, PUBLISH, GROUPS, RESULTS }
+enum class AppScreen { HOME, SCAN, PUBLISH, GROUPS, RESULTS, LOGS }
 
 @Composable
 fun BottomBar(current: AppScreen, onNavigate: (AppScreen) -> Unit) {
@@ -136,20 +136,20 @@ fun BottomBar(current: AppScreen, onNavigate: (AppScreen) -> Unit) {
     }
 }
 
-private val NeonGreen = Color(0xFF18F17A)
-private val NeonGreen2 = Color(0xFF00B95B)
-private val NeonCyan = Color(0xFF39D9FF)
-private val DeepBlack = Color(0xFF020A12)
-private val DeepNavy = Color(0xFF061521)
-private val NeonPanel = Color(0xEB081925)
-private val NeonPanel2 = Color(0xF30B1D2B)
-private val NeonBorder = Color(0xFF284352)
-private val SoftText = Color(0xFFA8B5BF)
-private val Danger = Color(0xFFFF4D62)
-private val Warning = Color(0xFFFFB52E)
+private val NeonGreen = Color(0xFF00D79A)
+private val NeonGreen2 = Color(0xFF00A97B)
+private val NeonCyan = Color(0xFF43D7FF)
+private val DeepBlack = Color(0xFF0A0D12)
+private val DeepNavy = Color(0xFF0D1219)
+private val NeonPanel = Color(0xF012171F)
+private val NeonPanel2 = Color(0xFF171C24)
+private val NeonBorder = Color(0xFF293441)
+private val SoftText = Color(0xFF9AA8B6)
+private val Danger = Color(0xFFFF5570)
+private val Warning = Color(0xFFFFBE55)
 
 private fun screenBrush() = Brush.verticalGradient(
-    listOf(DeepBlack, DeepNavy, Color(0xFF03101A))
+    listOf(DeepBlack, DeepNavy, Color(0xFF0B1017))
 )
 
 private fun activeBrush() = Brush.horizontalGradient(
@@ -158,33 +158,92 @@ private fun activeBrush() = Brush.horizontalGradient(
 
 @Composable
 private fun ScreenHeader(subtitle: String, onSettings: (() -> Unit)? = null) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (onSettings != null) {
-            Surface(
-                modifier = Modifier.size(48.dp).clickable(onClick = onSettings),
-                shape = RoundedCornerShape(15.dp),
-                color = NeonPanel2,
-                border = BorderStroke(1.dp, NeonBorder)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Settings, null, tint = NeonGreen)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onSettings != null) {
+                Surface(
+                    modifier = Modifier.size(44.dp).clickable(onClick = onSettings),
+                    shape = RoundedCornerShape(13.dp),
+                    color = NeonPanel2,
+                    border = BorderStroke(1.dp, NeonBorder)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Settings, null, tint = SoftText)
+                    }
                 }
+            } else Spacer(Modifier.width(44.dp))
+
+            Spacer(Modifier.weight(1f))
+
+            Column(horizontalAlignment = Alignment.End) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = NeonGreen.copy(alpha = 0.13f),
+                        border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.45f))
+                    ) {
+                        Text(
+                            "v2.17.0",
+                            color = NeonGreen,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Text(
+                        "AL-thmany Extractor",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Surface(
+                        modifier = Modifier.size(42.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        color = NeonGreen.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.55f))
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("ال", color = NeonGreen, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = SoftText)
             }
-        } else {
-            Spacer(Modifier.width(48.dp))
         }
-        Spacer(Modifier.weight(1f))
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                "AL-thmany",
-                style = MaterialTheme.typography.headlineMedium,
-                color = NeonGreen,
-                fontWeight = FontWeight.ExtraBold
-            )
-            Text(subtitle, style = MaterialTheme.typography.titleMedium, color = Color.White)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            HeaderBadge("Event-first", NeonGreen, Modifier.weight(1f))
+            HeaderBadge("Hybrid Profiles", NeonCyan, Modifier.weight(1f))
+            HeaderBadge("Package Guard", NeonGreen, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun HeaderBadge(text: String, accent: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = DeepBlack.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, NeonBorder)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(accent))
+            Spacer(Modifier.width(6.dp))
+            Text(text, color = SoftText, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
 }
@@ -196,8 +255,8 @@ private fun NeonCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(22.dp),
-        border = BorderStroke(1.dp, NeonBorder),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, NeonBorder.copy(alpha = 0.95f)),
         colors = CardDefaults.cardColors(containerColor = NeonPanel2),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -233,8 +292,8 @@ private fun NeonActionButton(
     icon: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(18.dp)
-    val brush = if (enabled) activeBrush() else Brush.horizontalGradient(listOf(Color(0xFF18303B), Color(0xFF18303B)))
+    val shape = RoundedCornerShape(14.dp)
+    val brush = if (enabled) Brush.horizontalGradient(listOf(Color(0xFF00C98E), NeonGreen, Color(0xFF00B983))) else Brush.horizontalGradient(listOf(Color(0xFF202832), Color(0xFF202832)))
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -242,7 +301,7 @@ private fun NeonActionButton(
             .background(brush)
             .border(1.dp, if (enabled) NeonGreen else NeonBorder, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 16.dp),
+            .padding(horizontal = 18.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -308,41 +367,55 @@ private fun WhatsAppSelector(
     onTargetWhatsApp: (String) -> Unit
 ) {
     NeonCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            NeonSectionTitle("اختيار نسخة واتساب") {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            NeonSectionTitle("WhatsApp المستهدف • Package Guard") {
                 Icon(Icons.Default.CheckCircle, null, tint = NeonGreen)
             }
             if (engine.availableWhatsApp.isEmpty()) {
-                Text("لا توجد نسخة واتساب قابلة للفتح داخل هذه البيئة", color = Danger)
+                Text("لا توجد نسخة واتساب قابلة للفتح داخل هذه البيئة", color = Danger, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
             } else {
-                engine.availableWhatsApp.forEach { instance ->
-                    val selected = engine.selectedWhatsAppPackage == instance.packageName
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (selected) NeonGreen.copy(alpha = 0.07f) else Color.Transparent)
-                            .border(1.dp, if (selected) NeonGreen else NeonBorder, RoundedCornerShape(16.dp))
-                            .clickable(enabled = !running && instance.launchable) { onTargetWhatsApp(instance.packageName) }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = selected,
-                            onClick = { if (!running && instance.launchable) onTargetWhatsApp(instance.packageName) },
-                            enabled = !running && instance.launchable,
-                            colors = RadioButtonDefaults.colors(selectedColor = NeonGreen)
-                        )
-                        Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                            Text(instance.labelAr, color = if (selected) NeonGreen else Color.White, fontWeight = FontWeight.Bold)
-                            Text("${instance.kind.name} • ${instance.packageName}", style = MaterialTheme.typography.labelSmall, color = SoftText)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    items(engine.availableWhatsApp, key = { it.packageName }) { instance ->
+                        val selected = engine.selectedWhatsAppPackage == instance.packageName
+                        Surface(
+                            modifier = Modifier
+                                .width(178.dp)
+                                .clickable(enabled = !running && instance.launchable) { onTargetWhatsApp(instance.packageName) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (selected) NeonGreen.copy(alpha = 0.12f) else DeepBlack.copy(alpha = 0.34f),
+                            border = BorderStroke(1.dp, if (selected) NeonGreen else NeonBorder)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                                horizontalAlignment = Alignment.End,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(instance.labelAr, color = if (selected) NeonGreen else Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    RadioButton(
+                                        selected = selected,
+                                        onClick = { if (!running && instance.launchable) onTargetWhatsApp(instance.packageName) },
+                                        enabled = !running && instance.launchable,
+                                        colors = RadioButtonDefaults.colors(selectedColor = NeonGreen)
+                                    )
+                                }
+                                Text(instance.packageName, style = MaterialTheme.typography.labelSmall, color = SoftText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
+                Text(
+                    "يتم تثبيت الحزمة المحددة طوال المهمة لمنع الانتقال إلى نسخة واتساب خاطئة.",
+                    color = SoftText,
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
 }
+
 
 
 @Composable
@@ -391,7 +464,7 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 18.dp, bottom = 26.dp)
     ) {
-        item { ScreenHeader("Extractor", onOpenAccessibility) }
+        item { ScreenHeader("WhatsApp استخراج • فحص • نشر", onOpenAccessibility) }
         item { FeatureSwitcher(AppScreen.HOME, {}, onScan, onPublish) }
 
         item {
@@ -430,7 +503,7 @@ fun HomeScreen(
         item {
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
-                    NeonSectionTitle("بيئة التشغيل") { Icon(Icons.Default.Groups, null, tint = NeonGreen) }
+                    NeonSectionTitle("إعدادات الجلسة والهدف") { Icon(Icons.Default.Groups, null, tint = NeonGreen) }
                     Text(engine.profileInfo.labelAr, color = NeonGreen, fontWeight = FontWeight.Bold)
                     Text(engine.profileInfo.detailAr, color = SoftText, textAlign = TextAlign.End)
                     Text("Profile Key: ${engine.profileInfo.profileKey}", color = SoftText, style = MaterialTheme.typography.labelSmall)
@@ -470,7 +543,7 @@ fun HomeScreen(
         item {
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    NeonSectionTitle("طريقة الاستخراج") { Icon(Icons.Default.Link, null, tint = NeonGreen) }
+                    NeonSectionTitle("وضع الاستخراج") { Icon(Icons.Default.Link, null, tint = NeonGreen) }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(ExtractionMode.entries) { mode ->
                             ChoicePill(
@@ -522,7 +595,7 @@ fun HomeScreen(
         item {
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.End) {
-                    NeonSectionTitle("حالة المهمة")
+                    NeonSectionTitle("مؤشر الأداء والتقدم")
                     Text(engine.message, color = if (running) NeonGreen else Color.White, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
                     engine.currentGroup?.let { Text("المجموعة الحالية: $it", color = SoftText) }
                     if (engine.runGroupCount > 0) {
@@ -578,8 +651,8 @@ fun HomeScreen(
                     }
                 }
                 else -> NeonActionButton(
-                    text = "بدء الاستخراج",
-                    enabled = accessibilityEnabled && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
+                    text = "بدء جلسة الاستخراج",
+                    enabled = runtimeReady && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
                     icon = { Icon(Icons.Default.Download, null, tint = Color.White) },
                     onClick = onStart
                 )
@@ -938,33 +1011,40 @@ private fun FeatureSwitcher(
     onScan: () -> Unit,
     onPublish: () -> Unit
 ) {
+    data class FeatureTab(val screen: AppScreen, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val action: () -> Unit)
     val items = listOf(
-        Triple(AppScreen.PUBLISH, "النشر", onPublish),
-        Triple(AppScreen.SCAN, "الفحص", onScan),
-        Triple(AppScreen.HOME, "الاستخراج", onExtraction)
+        FeatureTab(AppScreen.PUBLISH, "النشر", Icons.Default.Send, onPublish),
+        FeatureTab(AppScreen.SCAN, "الفحص", Icons.Default.CheckCircle, onScan),
+        FeatureTab(AppScreen.HOME, "الاستخراج", Icons.Default.Download, onExtraction)
     )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(NeonPanel)
-            .border(1.dp, NeonBorder, RoundedCornerShape(22.dp))
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF11161E))
+            .border(1.dp, NeonBorder, RoundedCornerShape(14.dp)),
+        horizontalArrangement = Arrangement.spacedBy(0.dp)
     ) {
-        items.forEach { (screen, label, action) ->
-            val isSelected = selected == screen
-            Box(
+        items.forEach { tab ->
+            val active = selected == tab.screen
+            Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(if (isSelected) activeBrush() else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)))
-                    .border(1.dp, if (isSelected) NeonGreen else Color.Transparent, RoundedCornerShape(18.dp))
-                    .clickable(onClick = action)
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
+                    .clickable(onClick = tab.action)
+                    .padding(top = 11.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                Text(label, color = if (isSelected) Color.White else SoftText, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(tab.icon, null, tint = if (active) NeonGreen else SoftText, modifier = Modifier.size(17.dp))
+                    Text(tab.label, color = if (active) NeonGreen else SoftText, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(if (active) NeonGreen else Color.Transparent)
+                )
             }
         }
     }
@@ -1001,7 +1081,7 @@ fun ScanScreen(
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf<ScanStatus?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
-    val runtimeReady = accessibilityEnabled && scan.serviceConnected
+    val runtimeReady = (accessibilityEnabled && scan.serviceConnected) || engine.shizukuReady
     val filtered = remember(items, query, filter) {
         items.filter { item ->
             (filter == null || item.status == filter) &&
@@ -1057,7 +1137,7 @@ fun ScanScreen(
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     NeonSectionTitle("محرك الفحص") { Icon(Icons.Default.CheckCircle, null, tint = NeonGreen) }
-                    RuntimeStatusLine(runtimeReady, if (runtimeReady) "Accessibility متصلة وجاهزة" else "Accessibility غير جاهزة لهذه النسخة")
+                    RuntimeStatusLine(runtimeReady, if (runtimeReady) "محرك التشغيل جاهز (Accessibility / Shizuku)" else "لا يوجد Backend جاهز لهذه النسخة")
                     HorizontalDivider(color = NeonBorder)
                     if (engine.availableWhatsApp.isEmpty()) {
                         Text("لا توجد نسخة واتساب قابلة للفتح", color = Danger)
@@ -1239,7 +1319,7 @@ fun ScanScreen(
                         ScanActionMode.JOIN_ONLY -> "بدء الانضمام"
                         ScanActionMode.SCAN_AND_JOIN -> "بدء فحص + انضمام"
                     },
-                    enabled = items.isNotEmpty() && accessibilityEnabled && scan.serviceConnected && engine.selectedWhatsAppPackage != null,
+                    enabled = items.isNotEmpty() && runtimeReady && engine.selectedWhatsAppPackage != null,
                     icon = { Icon(Icons.Default.PlayArrow, null, tint = Color.White) },
                     onClick = onStart
                 )
@@ -1311,7 +1391,7 @@ fun PublishScreen(
     var confirmStart by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     val running = publish.running
-    val runtimeReady = accessibilityEnabled && publish.serviceConnected
+    val runtimeReady = (accessibilityEnabled && publish.serviceConnected) || engine.shizukuReady
     val contentReady = when (publish.contentMode) {
         PublishContentMode.VCF -> !publish.attachmentUri.isNullOrBlank()
         PublishContentMode.VCF_WITH_TEXT, PublishContentMode.IMAGE_WITH_CAPTION -> draft.isNotBlank() && !publish.attachmentUri.isNullOrBlank()
@@ -1323,7 +1403,7 @@ fun PublishScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 18.dp, bottom = 26.dp)
     ) {
-        item { ScreenHeader("Publish") }
+        item { ScreenHeader("النشر الذكي") }
         item { FeatureSwitcher(AppScreen.PUBLISH, onExtraction, onScan, {}) }
 
         item {
@@ -1335,7 +1415,7 @@ fun PublishScreen(
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                         Text("محرك النشر", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        RuntimeStatusLine(runtimeReady, if (runtimeReady) "متصل وجاهز" else "Accessibility غير جاهزة لهذه البيئة")
+                        RuntimeStatusLine(runtimeReady, if (runtimeReady) "محرك التشغيل متصل وجاهز" else "لا يوجد Backend جاهز لهذه البيئة")
                     }
                     Spacer(Modifier.width(10.dp))
                     OutlinedButton(onClick = onGroups, border = BorderStroke(1.dp, NeonBorder), colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonGreen)) {
@@ -1498,7 +1578,7 @@ fun PublishScreen(
                 }
                 else -> NeonActionButton(
                     "معاينة وبدء النشر",
-                    enabled = contentReady && accessibilityEnabled && publish.serviceConnected && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
+                    enabled = contentReady && runtimeReady && engine.selectedWhatsAppPackage != null && engine.stats.totalGroups > 0,
                     icon = { Icon(Icons.Default.Send, null, tint = Color.White) },
                     onClick = { confirmStart = true }
                 )

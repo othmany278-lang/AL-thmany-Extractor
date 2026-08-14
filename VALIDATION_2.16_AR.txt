@@ -1,0 +1,20 @@
+AL-thmany Extractor 2.16.0 Root Fix + Neon UI
+
+PASS - versionCode 2160
+PASS - versionName 2.16.0
+PASS - extraction Search disabled
+PASS - normalized group matching
+PASS - parent-row click recovery
+PASS - structural chat verification
+PASS - bottom-navigation conversation-list recovery
+PASS - Shizuku structural chat confirmation
+PASS - Shizuku no-search extraction
+PASS - Hybrid backend UI gating
+PASS - Neon control-center UI contract
+PASS - source validation
+PASS - pure engine/profile checks
+PASS - pure scan checks
+PASS - pure publish checks
+PASS - pure runtime checks
+
+Android assemble/lint are configured in .github/workflows/build-apk.yml.

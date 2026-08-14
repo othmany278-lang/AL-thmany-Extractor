@@ -146,10 +146,10 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         waitForUi: suspend (Long) -> Unit
     ): Boolean {
         repeat(12) {
-            if (adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)) return true
+            if (adapter.isConversationOpenForTarget(service.currentRoot(), group.name, expectedPackage)) return true
             waitForUi(maxOf(timing.eventQuietMs, 140L))
         }
-        return adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)
+        return adapter.isConversationOpenForTarget(service.currentRoot(), group.name, expectedPackage)
     }
 
     private suspend fun scrollAndMatch(

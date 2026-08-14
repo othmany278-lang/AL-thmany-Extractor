@@ -17,6 +17,7 @@ class ExtractionSettingsStore(context: Context) {
         }.getOrDefault(SpeedProfile.ADAPTIVE),
         maxScrollIterations = prefs.getInt("max_scroll_iterations", 2_000).coerceIn(100, 10_000),
         maxSameGroupRetries = prefs.getInt("same_group_retries", 3).coerceIn(1, 5),
+        betweenItemsDelayMs = prefs.getLong("between_items_delay_ms", 0L).coerceIn(0L, 60_000L),
         strictEndProof = prefs.getBoolean("strict_end", true),
         autoRecoverWhatsApp = prefs.getBoolean("auto_recover", true),
         targetWhatsAppPackage = prefs.getString("target_whatsapp_package", null)
@@ -32,6 +33,14 @@ class ExtractionSettingsStore(context: Context) {
 
     fun setMaxScrollIterations(value: Int) {
         prefs.edit().putInt("max_scroll_iterations", value.coerceIn(100, 10_000)).apply()
+    }
+
+    fun setMaxSameGroupRetries(value: Int) {
+        prefs.edit().putInt("same_group_retries", value.coerceIn(1, 5)).apply()
+    }
+
+    fun setBetweenItemsDelayMs(value: Long) {
+        prefs.edit().putLong("between_items_delay_ms", value.coerceIn(0L, 60_000L)).apply()
     }
 
     fun setTargetWhatsAppPackage(packageName: String?) {

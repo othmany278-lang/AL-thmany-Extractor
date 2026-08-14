@@ -1,0 +1,1 @@
+Kotlin syntax scan: PASS (Android/Compose unresolved references ignored outside Gradle classpath)

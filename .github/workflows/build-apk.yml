@@ -1,4 +1,4 @@
-name: Build AL-thmany Extractor Hybrid Profiles APK
+name: Build AL-thmany Extractor 2.17 Exact Dashboard Root Fix APK
 
 on:
   push:
@@ -65,14 +65,14 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
           test -n "$APK"
           mkdir -p output
-          cp "$APK" output/AL-thmany-Extractor-HybridProfiles-2.15.0-debug.apk
-          sha256sum output/AL-thmany-Extractor-HybridProfiles-2.15.0-debug.apk > output/AL-thmany-Extractor-HybridProfiles-2.15.0-debug.apk.sha256
+          cp "$APK" output/AL-thmany-Extractor-ExactDashboard-RootFix-2.17.0-debug.apk
+          sha256sum output/AL-thmany-Extractor-ExactDashboard-RootFix-2.17.0-debug.apk > output/AL-thmany-Extractor-ExactDashboard-RootFix-2.17.0-debug.apk.sha256
           ls -lh output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AL-thmany-Extractor-HybridProfiles-2.15.0-APK
+          name: AL-thmany-Extractor-ExactDashboard-RootFix-2.17.0-APK
           path: output/
           if-no-files-found: error
           retention-days: 30
@@ -81,7 +81,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: AL-thmany-Extractor-HybridProfiles-2.15.0-Build-Log
+          name: AL-thmany-Extractor-ExactDashboard-RootFix-2.17.0-Build-Log
           path: build.log
           if-no-files-found: ignore
           retention-days: 7

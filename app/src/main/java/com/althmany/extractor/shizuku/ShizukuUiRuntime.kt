@@ -6,6 +6,7 @@ import com.althmany.extractor.data.GroupSyncCandidate
 import com.althmany.extractor.engine.LinkExtractor
 import com.althmany.extractor.engine.NodeSnapshot
 import java.util.Locale
+import java.text.Normalizer
 
 internal data class ShizukuUiNode(
     val index: Int,
@@ -94,7 +95,36 @@ internal class ShizukuUiRuntime(private val context: Context) {
     fun isGroupVisible(tree: ShizukuUiTree, name: String, packageName: String): Boolean {
         if (!isWhatsApp(tree, packageName) || isGroupInfo(tree)) return false
         val limit = (tree.height * 0.28f).toInt().coerceAtLeast(220)
-        return tree.nodes.any { it.text.trim().equals(name.trim(), true) && it.bounds.top <= limit }
+        return tree.nodes.any { groupNamesEquivalent(it.text, name) && it.bounds.top <= limit }
+    }
+
+    /**
+     * Confirmation used after an exact synced-row click. Some Samsung/WhatsApp builds hide the
+     * conversation title from UIAutomation while still exposing the message composer/list.
+     */
+    fun isConversationOpenForTarget(tree: ShizukuUiTree, name: String, packageName: String): Boolean {
+        if (!isWhatsApp(tree, packageName) || isGroupInfo(tree)) return false
+        if (isGroupVisible(tree, name, packageName)) return true
+        val minComposerTop = (tree.height * 0.52f).toInt()
+        val hasComposer = tree.nodes.any { it.editable && it.enabled && it.bounds.top >= minComposerTop }
+        if (hasComposer) return true
+        val hasLargeScrollable = tree.nodes.any { it.scrollable && it.bounds.height() >= (tree.height * 0.28f).toInt() }
+        val topLimit = (tree.height * 0.28f).toInt()
+        val headerCandidate = tree.nodes.any { it.bounds.top <= topLimit && looksLikeConversationTitle(it.text.ifBlank { it.description }) }
+        return hasLargeScrollable && headerCandidate
+    }
+
+
+    fun isConversationListVisible(tree: ShizukuUiTree, packageName: String): Boolean {
+        if (!isWhatsApp(tree, packageName) || isGroupInfo(tree)) return false
+        val minComposerTop = (tree.height * 0.52f).toInt()
+        if (tree.nodes.any { it.editable && it.enabled && it.bounds.top >= minComposerTop }) return false
+        val bottomStart = (tree.height * 0.72f).toInt()
+        val navLabels = listOf("الدردشات", "Chats", "التحديثات", "Updates", "المجتمعات", "Communities", "المكالمات", "Calls")
+        val bottomNav = tree.nodes.any { n ->
+            n.bounds.top >= bottomStart && navLabels.any { p -> n.label.equals(p, true) || n.label.contains(p, true) }
+        }
+        return bottomNav || collectChatCandidates(tree, packageName).isNotEmpty()
     }
 
     fun toNodeSnapshot(tree: ShizukuUiTree): NodeSnapshot {
@@ -141,7 +171,7 @@ internal class ShizukuUiRuntime(private val context: Context) {
     }
 
     suspend fun openVisibleChat(tree: ShizukuUiTree, name: String, packageName: String): Boolean {
-        val exact = tree.nodes.filter { it.text.trim().equals(name.trim(), true) }
+        val exact = tree.nodes.filter { groupNamesEquivalent(it.text, name) }
         for (n in exact.sortedBy { it.bounds.top }) {
             val row = tree.ancestors(n).firstOrNull { it.clickable && it.enabled && it.bounds.height() in 44..430 } ?: n
             if (clickNode(tree, row, packageName)) return true
@@ -151,7 +181,7 @@ internal class ShizukuUiRuntime(private val context: Context) {
 
     suspend fun clickHeader(tree: ShizukuUiTree, name: String, packageName: String): Boolean {
         val maxTop = (tree.height * 0.28f).toInt()
-        val n = tree.nodes.filter { it.text.trim().equals(name.trim(), true) && it.bounds.top <= maxTop }.minByOrNull { it.bounds.top } ?: return false
+        val n = tree.nodes.filter { groupNamesEquivalent(it.text, name) && it.bounds.top <= maxTop }.minByOrNull { it.bounds.top } ?: return false
         return clickNode(tree, n, packageName)
     }
 
@@ -213,6 +243,22 @@ internal class ShizukuUiRuntime(private val context: Context) {
         for(c in line){ if(slash){b.append('\\').append(c);slash=false}else when(c){'\\'->slash=true;'\t'->{out+=b.toString();b.setLength(0)};else->b.append(c)} }; if(slash)b.append('\\');out+=b.toString();return out
     }
     private fun unescape(v:String):String = buildString { var i=0; while(i<v.length){ if(v[i]=='\\'&&i+1<v.length){ when(v[i+1]){'t'->append('\t');'n'->append('\n');'r'->append('\r');'\\'->append('\\');else->{append(v[i]);append(v[i+1])}};i+=2}else{append(v[i]);i++} } }
+    private fun normalizeGroupName(value: String): String {
+        return Normalizer.normalize(value, Normalizer.Form.NFKC)
+            .replace(Regex("[\u200E\u200F\u202A-\u202E\u2066-\u2069\uFE0E\uFE0F]"), "")
+            .replace(Regex("[\u064B-\u065F\u0670\u06D6-\u06ED]"), "")
+            .replace('ـ', ' ')
+            .replace(Regex("\s+"), " ")
+            .trim()
+            .lowercase(Locale.ROOT)
+    }
+
+    private fun groupNamesEquivalent(a: String, b: String): Boolean {
+        val na = normalizeGroupName(a)
+        val nb = normalizeGroupName(b)
+        return na.isNotBlank() && na == nb
+    }
+
     private fun normalizeToken(v:String)=v.trim().replace(Regex("\\s+")," ").lowercase(Locale.ROOT)
     private fun looksLikeConversationTitle(v:String):Boolean{val s=v.trim();if(s.length !in 1..120)return false;val n=normalizeToken(s);if(n in chromeBlacklist)return false;if(s.startsWith("http://",true)||s.startsWith("https://",true))return false;if(looksLikeActivityLabel(s))return false;return s.any{it.isLetterOrDigit()}}
     private fun parseUnreadCount(v:String):Int{if(!v.contains("unread",true)&&!v.contains("غير مقرو",true))return 0;val x=v.replace('٠','0').replace('١','1').replace('٢','2').replace('٣','3').replace('٤','4').replace('٥','5').replace('٦','6').replace('٧','7').replace('٨','8').replace('٩','9');return Regex("\\b(\\d{1,4})\\b").findAll(x).mapNotNull{it.groupValues[1].toIntOrNull()}.maxOrNull()?:1}

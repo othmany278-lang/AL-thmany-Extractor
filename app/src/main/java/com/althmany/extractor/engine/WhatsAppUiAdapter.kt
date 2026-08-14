@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import com.althmany.extractor.data.GroupSyncCandidate
 import java.util.Locale
+import java.text.Normalizer
 
 /**
  * WhatsApp-specific heuristics are isolated here. No database or job state is kept in this class.
@@ -125,7 +126,7 @@ class WhatsAppUiAdapter {
         walk(root) { node ->
             if (!node.isVisibleToUser) return@walk
             val labels = listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
-            if (labels.none { it.trim().equals(wanted, true) }) return@walk
+            if (labels.none { groupNamesEquivalent(it, wanted) }) return@walk
             val rect = Rect().also(node::getBoundsInScreen)
             if (rect.top < bestTop && hasClickableSelfOrAncestor(node)) { bestTop = rect.top; best = node }
         }
@@ -135,9 +136,43 @@ class WhatsAppUiAdapter {
     fun isGroupVisible(root: AccessibilityNodeInfo?, groupName: String, expectedPackage: String? = null): Boolean {
         if (root == null || !isWhatsAppRoot(root, expectedPackage)) return false
         // A list-row title can sit near the top of WhatsApp too. Reject the main conversation list
-        // before accepting the header, then use both text and contentDescription for newer builds.
+        // before accepting the header. Group-name comparison is normalized to survive bidi marks,
+        // Arabic diacritics, variation selectors and whitespace differences exposed by WhatsApp.
         if (isConversationListVisible(root) || isGroupInfoScreen(root)) return false
         return currentChatHeaderNode(root, groupName) != null
+    }
+
+    /**
+     * Structural confirmation used only after the router has clicked a row/search result that already
+     * matched the requested group. Some WhatsApp/Samsung builds do not expose the chat title in the
+     * accessibility header even though the conversation is genuinely open.
+     */
+    fun isConversationOpenForTarget(
+        root: AccessibilityNodeInfo?,
+        groupName: String,
+        expectedPackage: String? = null
+    ): Boolean {
+        if (root == null || !isWhatsAppRoot(root, expectedPackage)) return false
+        if (isConversationListVisible(root) || isGroupInfoScreen(root)) return false
+        if (currentChatHeaderNode(root, groupName) != null) return true
+        // Composer is the strongest generic signal of an opened writable chat. For read-only groups,
+        // accept a message-like scrollable content region plus a visible top header candidate.
+        if (findMessageComposer(root) != null) return true
+        val window = Rect().also(root::getBoundsInScreen)
+        var hasLargeScrollable = false
+        var hasHeaderCandidate = false
+        walk(root) { node ->
+            if (!node.isVisibleToUser) return@walk
+            val rect = Rect().also(node::getBoundsInScreen)
+            if (node.isScrollable && rect.height() > window.height() * 0.28f && rect.width() > window.width() * 0.55f) {
+                hasLargeScrollable = true
+            }
+            if (rect.top <= window.top + (window.height() * 0.28f).toInt()) {
+                val label = node.text?.toString().orEmpty().ifBlank { node.contentDescription?.toString().orEmpty() }
+                if (label.isNotBlank() && looksLikeConversationTitle(label)) hasHeaderCandidate = true
+            }
+        }
+        return hasLargeScrollable && hasHeaderCandidate
     }
 
     /** True only for the main Chats list, never for an opened conversation/info/search screen. */
@@ -149,8 +184,25 @@ class WhatsAppUiAdapter {
         val bounds = Rect().also(list::getBoundsInScreen)
         val window = Rect().also(root::getBoundsInScreen)
         if (bounds.height() < window.height() * 0.28f || bounds.width() < window.width() * 0.55f) return false
-        return findVisibleFilterChip(root, chatFilterLabels) != null ||
-            archivedPatterns.any { pattern -> root.findAccessibilityNodeInfosByText(pattern).any { it.isVisibleToUser } }
+
+        val hasFilter = findVisibleFilterChip(root, chatFilterLabels) != null
+        val hasArchived = archivedPatterns.any { pattern ->
+            root.findAccessibilityNodeInfosByText(pattern).any { it.isVisibleToUser }
+        }
+        // Newer WhatsApp builds can hide filter chips. The bottom navigation is a stronger
+        // conversation-list signal and prevents recoverToConversationList() from backing out of
+        // WhatsApp merely because a chip was not exposed to Accessibility.
+        val bottomStart = window.top + (window.height() * 0.72f).toInt()
+        val bottomNavLabels = listOf("الدردشات", "Chats", "التحديثات", "Updates", "المجتمعات", "Communities", "المكالمات", "Calls")
+        var hasBottomNav = false
+        walk(root) { node ->
+            if (hasBottomNav || !node.isVisibleToUser) return@walk
+            val r = Rect().also(node::getBoundsInScreen)
+            if (r.top < bottomStart) return@walk
+            val label = listOfNotNull(node.text?.toString(), node.contentDescription?.toString()).joinToString(" ")
+            if (bottomNavLabels.any { label.equals(it, true) || label.contains(it, true) }) hasBottomNav = true
+        }
+        return hasFilter || hasArchived || hasBottomNav
     }
 
     /** Best-effort activation of WhatsApp's real Groups filter shown above the chat list. */
@@ -371,21 +423,49 @@ class WhatsAppUiAdapter {
     fun findVisibleChatListRow(root: AccessibilityNodeInfo?, exactName: String): AccessibilityNodeInfo? {
         if (root == null || exactName.isBlank()) return null
         val listRoot = findChatListContainer(root) ?: return null
-        val wanted = exactName.trim()
         val listBounds = Rect().also(listRoot::getBoundsInScreen)
         val window = Rect().also(root::getBoundsInScreen)
-        val minWidth = (window.width() * 0.52f).toInt().coerceAtLeast(1)
+        val minWidth = (window.width() * 0.48f).toInt().coerceAtLeast(1)
         var bestRow: AccessibilityNodeInfo? = null
         var bestTop = Int.MAX_VALUE
+
+        // First match the visible title node, then climb to its clickable/wide row. This handles
+        // WhatsApp builds where the TextView itself is not clickable but its parent container is.
         walk(listRoot) { node ->
-            if (!node.isVisibleToUser || !node.isEnabled || !node.isClickable) return@walk
+            if (!node.isVisibleToUser) return@walk
+            val labels = listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
+            if (labels.none { groupNamesEquivalent(it, exactName) }) return@walk
+            var candidate: AccessibilityNodeInfo? = node
+            repeat(7) {
+                val c = candidate ?: return@repeat
+                val rect = Rect().also(c::getBoundsInScreen)
+                val validGeometry = Rect.intersects(listBounds, rect) && rect.height() in 40..380 && rect.width() >= minWidth
+                if (c.isVisibleToUser && c.isEnabled && validGeometry && (c.isClickable || hasClickableSelfOrAncestor(c))) {
+                    val clickable = nearestClickable(c) ?: c
+                    val clickRect = Rect().also(clickable::getBoundsInScreen)
+                    if (clickRect.top < bestTop) {
+                        bestTop = clickRect.top
+                        bestRow = clickable
+                    }
+                    return@walk
+                }
+                candidate = c.parent
+            }
+        }
+
+        if (bestRow != null) return bestRow
+
+        // Compatibility fallback for merged accessibility rows that expose title only through row parsing.
+        walk(listRoot) { node ->
+            if (!node.isVisibleToUser || !node.isEnabled) return@walk
             val rect = Rect().also(node::getBoundsInScreen)
-            if (!Rect.intersects(listBounds, rect) || rect.height() !in 44..340 || rect.width() < minWidth) return@walk
+            if (!Rect.intersects(listBounds, rect) || rect.height() !in 40..380 || rect.width() < minWidth) return@walk
             val title = conversationTitleFromRow(node) ?: return@walk
-            if (!title.equals(wanted, ignoreCase = true)) return@walk
-            if (rect.top < bestTop) {
+            if (!groupNamesEquivalent(title, exactName)) return@walk
+            val clickable = nearestClickable(node) ?: if (node.isClickable) node else null
+            if (clickable != null && rect.top < bestTop) {
                 bestTop = rect.top
-                bestRow = node
+                bestRow = clickable
             }
         }
         return bestRow
@@ -393,16 +473,14 @@ class WhatsAppUiAdapter {
 
     private fun currentChatHeaderNode(root: AccessibilityNodeInfo?, groupName: String): AccessibilityNodeInfo? {
         if (root == null || groupName.isBlank()) return null
-        val wanted = groupName.trim()
         val window = Rect().also(root::getBoundsInScreen)
         val headerBottom = window.top + (window.height() * 0.28f).toInt()
         var best: AccessibilityNodeInfo? = null
         var bestTop = Int.MAX_VALUE
         walk(root) { node ->
             if (!node.isVisibleToUser) return@walk
-            val label = node.text?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
-                ?: node.contentDescription?.toString()?.trim().orEmpty()
-            if (!label.equals(wanted, true)) return@walk
+            val labels = listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
+            if (labels.none { groupNamesEquivalent(it, groupName) }) return@walk
             val rect = Rect().also(node::getBoundsInScreen)
             if (rect.top <= headerBottom && rect.width() > 0 && rect.height() > 0 && rect.top < bestTop) {
                 bestTop = rect.top
@@ -744,6 +822,31 @@ class WhatsAppUiAdapter {
             .replace('۰','0').replace('۱','1').replace('۲','2').replace('۳','3').replace('۴','4')
             .replace('۵','5').replace('۶','6').replace('۷','7').replace('۸','8').replace('۹','9')
         return Regex("\\b(\\d{1,4})\\b").findAll(latinized).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull() ?: 1
+    }
+
+
+    private fun groupNamesEquivalent(a: String, b: String): Boolean = normalizeGroupIdentity(a) == normalizeGroupIdentity(b)
+
+    private fun normalizeGroupIdentity(value: String): String {
+        if (value.isBlank()) return ""
+        val normalized = Normalizer.normalize(value, Normalizer.Form.NFKC)
+            .replace(Regex("[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]"), "")
+            .replace(Regex("[\u064B-\u065F\u0670\u06D6-\u06ED\uFE00-\uFE0F]"), "")
+            .replace('ـ', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .lowercase(Locale.ROOT)
+        return normalized
+    }
+
+    private fun nearestClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var current: AccessibilityNodeInfo? = node
+        repeat(8) {
+            val c = current ?: return null
+            if (c.isVisibleToUser && c.isEnabled && c.isClickable) return c
+            current = c.parent
+        }
+        return null
     }
 
     private fun looksLikeActivityLabel(value: String): Boolean {

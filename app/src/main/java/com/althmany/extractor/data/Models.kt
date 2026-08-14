@@ -56,6 +56,8 @@ data class ExtractionPreferences(
     val speed: SpeedProfile = SpeedProfile.ADAPTIVE,
     val maxScrollIterations: Int = 2_000,
     val maxSameGroupRetries: Int = 3,
+    /** Optional user pacing between completed groups. 0 = instant handoff. */
+    val betweenItemsDelayMs: Long = 0L,
     val strictEndProof: Boolean = true,
     val autoRecoverWhatsApp: Boolean = true,
     val targetWhatsAppPackage: String? = null

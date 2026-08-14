@@ -1,3 +1,24 @@
+# AL-thmany Extractor 2.17.0 — Exact Dashboard + Root Fix
+
+## الإصدار الحالي
+
+2.17.0 يعالج مسار التشغيل الفعلي من **المزامنة → فتح القروب من الذاكرة → إثبات المحادثة → الاستخراج Event-first**، ويعيد تصميم الواجهة إلى لوحة AL-thmany Extractor الداكنة/الخضراء.
+
+أهم الفروق عن 2.15:
+
+- الاستخراج لا يكتب اسم القروب في Search بعد المزامنة.
+- مطابقة القروبات أصبحت مقاومة لاختلافات RTL/Unicode/التشكيل والمسافات.
+- إذا كان TextView للاسم غير قابل للنقر، يتم الصعود إلى parent/row الصحيح.
+- إثبات فتح القروب يعتمد على Header عند توفره، أو بنية المحادثة بعد ضغطة صف مطابقة.
+- تحسين اكتشاف قائمة واتساب بواسطة Bottom Navigation حتى لا يخرج Recovery من التطبيق بسبب اختفاء Filter Chips.
+- نفس الإصلاحات الأساسية تمت إضافتها إلى Shizuku؛ استخراج Shizuku لا يستخدم Search أيضًا.
+- أزرار الاستخراج/الفحص/النشر تقبل Shizuku كـBackend جاهز بدل اشتراط Accessibility فقط.
+- واجهة Compose الجديدة: `AL-thmany Extractor` + `v2.17.0` + Event-first / Hybrid Profiles / Package Guard + تبويبات الاستخراج والفحص والنشر.
+
+راجع: `CHANGELOG_2.17_AR.md` و`UI_2.17_AR.md`، وشغّل `scripts/validate_release.py` للتحقق من عقد الإصدار.
+
+---
+
 # AL-thmany Extractor 2.14.2 — Group Sync Runtime Fix
 
 

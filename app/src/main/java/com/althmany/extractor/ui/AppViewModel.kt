@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.althmany.extractor.ExtractorApp
 import com.althmany.extractor.data.ExtractionMode
 import com.althmany.extractor.data.LinkRecord
+import com.althmany.extractor.data.ExtractionLog
 import com.althmany.extractor.data.GroupSelectionPreset
 import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.data.ScanRecord
@@ -39,6 +40,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _links = MutableStateFlow<List<LinkRecord>>(emptyList())
     val links: StateFlow<List<LinkRecord>> = _links.asStateFlow()
+
+    private val _logs = MutableStateFlow<List<ExtractionLog>>(emptyList())
+    val logs: StateFlow<List<ExtractionLog>> = _logs.asStateFlow()
 
     private val _scanItems = MutableStateFlow<List<ScanRecord>>(emptyList())
     val scanItems: StateFlow<List<ScanRecord>> = _scanItems.asStateFlow()
@@ -84,6 +88,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _groups.value = repo.groups()
             _links.value = repo.links()
+            _logs.value = repo.logs()
             _scanItems.value = repo.scanItems()
             val publishRunId = PublishController.state.value.activeRunId
             _publishItems.value = if (publishRunId == null) emptyList() else repo.publishItems(publishRunId)
@@ -114,6 +119,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setMode(mode: ExtractionMode) = ExtractionController.setMode(mode)
     fun setSpeed(speed: SpeedProfile) = ExtractionController.setSpeed(speed)
     fun setMaxRounds(value: Int) = ExtractionController.setMaxScrollIterations(value)
+    fun setExtractionRetries(value: Int) = ExtractionController.setMaxSameGroupRetries(value)
+    fun setExtractionDelayMs(value: Long) = ExtractionController.setBetweenItemsDelayMs(value)
     fun setTargetWhatsApp(packageName: String) = ExtractionController.setTargetWhatsAppPackage(packageName)
     fun refreshRuntimeEnvironment() = ExtractionController.refreshRuntimeEnvironment()
 
@@ -212,5 +219,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun reloadLinks() { viewModelScope.launch { _links.value = repo.links() } }
+    fun reloadLogs() { viewModelScope.launch { _logs.value = repo.logs() } }
     fun consumeMessage() { _message.value = null }
 }
