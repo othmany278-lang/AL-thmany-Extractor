@@ -42,6 +42,7 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         // Return to the conversation list without opening Search. A stale info/media screen is a
         // common reason older builds became stuck between groups.
         recoverToConversationList(service, timing, waitForUi)
+        prepareGroupList(service, timing, waitForUi)
 
         val priority = linkedSetOf<GroupAccessMethod>()
         // Cached access is useful only if it does not violate the global rule that Search is last.
@@ -89,11 +90,23 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         timing: TimingPolicy,
         waitForUi: suspend (Long) -> Unit
     ) {
-        repeat(4) {
-            if (adapter.collectChatListCandidates(service.currentRoot()).size >= 2) return
+        repeat(5) {
+            if (adapter.isConversationListVisible(service.currentRoot())) return
             service.performBack()
             waitForUi(timing.searchOpenMs)
         }
+    }
+
+    private suspend fun prepareGroupList(
+        service: WhatsAppAccessibilityService,
+        timing: TimingPolicy,
+        waitForUi: suspend (Long) -> Unit
+    ) {
+        val root = service.currentRoot() ?: return
+        if (!adapter.isConversationListVisible(root) || adapter.isGroupsFilterActive(root)) return
+        val clicked = adapter.activateGroupsFilter(root) ||
+            service.tapBounds(adapter.groupsFilterBounds(root), timing.gestureDurationMs)
+        if (clicked) waitForUi(timing.searchOpenMs)
     }
 
     private suspend fun openVisible(
@@ -104,10 +117,38 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         waitForUi: suspend (Long) -> Unit
     ): Boolean {
         val root = service.currentRoot() ?: return false
-        if (!adapter.openVisibleChatListRow(root, group.name)) return false
+        val row = adapter.findVisibleChatListRow(root, group.name)
+        val clicked = when {
+            row == null -> false
+            row.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) -> true
+            else -> {
+                val rect = android.graphics.Rect().also(row::getBoundsInScreen)
+                service.tapBounds(rect, timing.gestureDurationMs)
+            }
+        }
+        if (!clicked) return false
         waitForUi(timing.groupOpenMs)
-        if (adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)) return true
-        waitForUi(timing.eventQuietMs)
+        if (verifyChatOpen(group, service, expectedPackage, timing, waitForUi)) return true
+        // Never start scrolling while an unverified chat is open. Return to the list first.
+        if (!adapter.isConversationListVisible(service.currentRoot())) {
+            service.performBack()
+            waitForUi(timing.searchOpenMs)
+            prepareGroupList(service, timing, waitForUi)
+        }
+        return false
+    }
+
+    private suspend fun verifyChatOpen(
+        group: TargetGroup,
+        service: WhatsAppAccessibilityService,
+        expectedPackage: String,
+        timing: TimingPolicy,
+        waitForUi: suspend (Long) -> Unit
+    ): Boolean {
+        repeat(12) {
+            if (adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)) return true
+            waitForUi(maxOf(timing.eventQuietMs, 140L))
+        }
         return adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)
     }
 
@@ -119,21 +160,42 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         waitForUi: suspend (Long) -> Unit,
         maxScrollPasses: Int
     ): Boolean {
+        // The old 2.14 router searched only toward the end of the list. After one group was opened,
+        // the next selected group could be above the current list position and was never found.
+        // Search both directions using fresh roots, then leave Search as the final fallback.
+        val budget = maxScrollPasses.coerceIn(12, 700)
+        if (scanDirection(group, service, expectedPackage, timing, waitForUi, forward = true, passes = budget / 2)) return true
+        recoverToConversationList(service, timing, waitForUi)
+        prepareGroupList(service, timing, waitForUi)
+        if (scanDirection(group, service, expectedPackage, timing, waitForUi, forward = false, passes = budget)) return true
+        recoverToConversationList(service, timing, waitForUi)
+        prepareGroupList(service, timing, waitForUi)
+        return scanDirection(group, service, expectedPackage, timing, waitForUi, forward = true, passes = budget)
+    }
+
+    private suspend fun scanDirection(
+        group: TargetGroup,
+        service: WhatsAppAccessibilityService,
+        expectedPackage: String,
+        timing: TimingPolicy,
+        waitForUi: suspend (Long) -> Unit,
+        forward: Boolean,
+        passes: Int
+    ): Boolean {
         var stable = 0
         var lastSignature: Int? = null
-        repeat(maxScrollPasses.coerceIn(8, 700)) {
+        repeat(passes.coerceAtLeast(1)) {
             val root = service.currentRoot() ?: run {
                 waitForUi(timing.eventQuietMs)
                 return@repeat
             }
-            if (adapter.openVisibleChatListRow(root, group.name)) {
-                waitForUi(timing.groupOpenMs)
-                if (adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)) return true
-                recoverToConversationList(service, timing, waitForUi)
-            }
-
+            if (openVisible(group, service, expectedPackage, timing, waitForUi)) return true
             val before = adapter.snapshot(root).signature
-            val accepted = adapter.scrollChatListForward(root) || service.swipeChatListForward(timing.gestureDurationMs)
+            val accepted = if (forward) {
+                adapter.scrollChatListForward(root) || service.swipeChatListForward(timing.gestureDurationMs)
+            } else {
+                adapter.scrollChatListBackward(root) || service.swipeChatListBackward(timing.gestureDurationMs)
+            }
             waitForUi(timing.eventQuietMs)
             val after = adapter.snapshot(service.currentRoot()).signature
             stable = if (!accepted || before == after || after == lastSignature) stable + 1 else 0
@@ -159,8 +221,6 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         root = service.currentRoot()
         if (!adapter.openSearchResult(root, group.name)) return false
         waitForUi(timing.groupOpenMs)
-        if (adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)) return true
-        waitForUi(timing.eventQuietMs)
-        return adapter.isGroupVisible(service.currentRoot(), group.name, expectedPackage)
+        return verifyChatOpen(group, service, expectedPackage, timing, waitForUi)
     }
 }

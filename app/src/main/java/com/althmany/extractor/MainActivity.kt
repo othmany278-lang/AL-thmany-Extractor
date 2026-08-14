@@ -150,6 +150,8 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     engine = engine,
                     accessibilityEnabled = isAccessibilityServiceEnabled(context),
                     onOpenAccessibility = ExtractionController::openAccessibilitySettings,
+                    onRequestShizuku = { ExtractionController.requestShizukuPermission() },
+                    onProbeShizuku = ExtractionController::probeShizuku,
                     onOpenWhatsApp = { ExtractionController.openWhatsApp() },
                     onStart = ExtractionController::start,
                     onPause = ExtractionController::pause,

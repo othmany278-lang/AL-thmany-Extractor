@@ -14,6 +14,11 @@ object ProfileLaunchPolicy {
     }
 
     fun isMismatch(expected: String?, observed: String?): Boolean =
-        expected != null && observed != null && expected != observed &&
-            (observed == "com.whatsapp" || observed == "com.whatsapp.w4b")
+        expected != null && observed != null && expected != observed && isWhatsAppLikePackage(observed)
+
+    private fun isWhatsAppLikePackage(packageName: String): Boolean =
+        packageName == "com.whatsapp" ||
+            packageName == "com.whatsapp.w4b" ||
+            packageName == "com.whatsapp2" ||
+            packageName.contains("whatsapp", ignoreCase = true)
 }

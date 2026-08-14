@@ -24,6 +24,16 @@ required = [
     'app/src/main/java/com/althmany/extractor/data/ExtractorRepository.kt',
     'app/src/main/java/com/althmany/extractor/export/ExportManager.kt',
     '.github/workflows/build-apk.yml',
+    'app/src/main/java/com/althmany/extractor/profile/ProfileEnvironment.kt',
+    'app/src/main/java/com/althmany/extractor/profile/ProfileAccessibilityRuntime.kt',
+    'app/src/main/java/com/althmany/extractor/profile/NativeProfileEngineRouter.kt',
+    'app/src/main/java/com/althmany/extractor/profile/DualMessengerMatcher.kt',
+    'app/src/main/java/com/althmany/extractor/profile/WhatsAppInstanceRegistry.kt',
+    'app/src/main/java/com/althmany/extractor/shizuku/ShizukuBridge.kt',
+    'app/src/main/java/com/althmany/extractor/shizuku/ShizukuShellUserService.kt',
+    'app/src/main/java/com/althmany/extractor/shizuku/PersistentUiAutomationBridge.kt',
+    'app/src/main/java/com/althmany/extractor/shizuku/ShizukuUiRuntime.kt',
+    'app/src/main/aidl/com/althmany/extractor/shizuku/IShizukuShellService.aidl',
 ]
 for rel in required:
     if not (ROOT / rel).exists():
@@ -52,14 +62,24 @@ bridge = read('app/src/main/java/com/althmany/extractor/accessibility/Accessibil
 link_extractor = read('app/src/main/java/com/althmany/extractor/engine/LinkExtractor.kt')
 workflow = read('.github/workflows/build-apk.yml')
 exporter = read('app/src/main/java/com/althmany/extractor/export/ExportManager.kt')
+profile_env = read('app/src/main/java/com/althmany/extractor/profile/ProfileEnvironment.kt')
+profile_access = read('app/src/main/java/com/althmany/extractor/profile/ProfileAccessibilityRuntime.kt')
+profile_router = read('app/src/main/java/com/althmany/extractor/profile/NativeProfileEngineRouter.kt')
+dual = read('app/src/main/java/com/althmany/extractor/profile/DualMessengerMatcher.kt')
+registry = read('app/src/main/java/com/althmany/extractor/profile/WhatsAppInstanceRegistry.kt')
+shizuku_bridge = read('app/src/main/java/com/althmany/extractor/shizuku/ShizukuBridge.kt')
+shizuku_service = read('app/src/main/java/com/althmany/extractor/shizuku/ShizukuShellUserService.kt')
+shizuku_uia = read('app/src/main/java/com/althmany/extractor/shizuku/PersistentUiAutomationBridge.kt')
+shizuku_runtime = read('app/src/main/java/com/althmany/extractor/shizuku/ShizukuUiRuntime.kt')
+access_xml = read('app/src/main/res/xml/accessibility_service_config.xml')
 
 checks = {
     'AGP 8.13.2': 'version "8.13.2"' in root_build,
     'Kotlin 2.3.21': root_build.count('version "2.3.21"') >= 2,
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
-    'versionCode 2140': 'versionCode = 2140' in app_build,
-    'versionName 2.14.0': 'versionName = "2.14.0"' in app_build,
+    'versionCode 2150': 'versionCode = 2150' in app_build,
+    'versionName 2.15.0': 'versionName = "2.15.0"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -69,7 +89,7 @@ checks = {
         'lastSuccessfulOpenMethod', 'accessSuccessCount', 'accessFailureCount', 'syncOrder'
     ]),
     'No AccessibilityNodeInfo persistence model': 'AccessibilityNodeInfo' not in models and 'import android.view.accessibility.AccessibilityNodeInfo' not in db,
-    'SQLite group memory DB v10': 'DB_VERSION = 10' in db,
+    'SQLite group memory DB v11': 'DB_VERSION = 11' in db,
     'Unified package-scoped group database': all(x in db for x in [
         'whatsapp_package', 'jid_or_group_id', 'preferred_access_method', 'last_successful_open_method',
         'sync_order', 'UNIQUE(name, whatsapp_package)'
@@ -77,9 +97,19 @@ checks = {
     'Legacy group row coalescing': 'target_groups_legacy' in db and 'legacyId' in db,
     'Package-scoped extraction queue': 'pendingSelectedGroups(targetPackage)' in extract,
     'Package-scoped selection presets': 'setSelectionPreset(preset: GroupSelectionPreset, whatsappPackage: String?' in db,
+    'Discovered groups start unselected': 'put("selected", if (discovered) 0 else 1)' in db,
+    'Stale sync generation guard': all(x in db for x in ['sync_generation', 'stale', 'finalizeGroupSync', 'selected=0, stale=1']),
+    'Old discovered garbage hidden on v11 migration': 'UPDATE target_groups SET selected=0, stale=1 WHERE discovered=1' in db,
+    'Group-only WhatsApp filter sync': all(x in extract for x in ['activateGroupsOnlyFilter', 'verifiedGroupHint = true', 'فلتر المجموعات']),
+    'Safe empty-sync preservation': 'تم الحفاظ على قاعدة القروبات القديمة بدون تعديل' in extract,
+    'System UI labels excluded from group names': all(x in adapter for x in ['جهات اتصالك غير متزامنة', 'المجموعات', 'اسأل meta ai أو ابحث']),
+    'Chat-list container scoped scanning': 'findChatListContainer' in adapter and 'collectChatListCandidatesDetailed' in adapter,
 
     'Shared GroupAccessRouter': 'class GroupAccessRouter' in router and 'GroupAccessRouter(adapter)' in extract and 'GroupAccessRouter(adapter)' in publish,
     'Visible-list open without Search': 'openVisibleChatListRow' in adapter and 'GroupAccessMethod.VISIBLE_LIST' in router,
+    'Groups filter prepared before route': 'prepareGroupList(service, timing, waitForUi)' in router and 'activateGroupsFilter' in router,
+    'Bidirectional list match': 'forward = false' in router and 'scrollChatListBackward' in router,
+    'Post-click header verification': 'verifyChatOpen' in router and 'Never start scrolling while an unverified chat is open' in router,
     'Scroll + match before Search': router.find('priority += GroupAccessMethod.SCROLL_MATCH') < router.find('priority += GroupAccessMethod.SEARCH_FALLBACK'),
     'Search is late fallback': 'SEARCH_FALLBACK("Search كحل أخير")' in models and 'allowSearchFallback' in router,
     'No fake Android JID direct route': 'does not expose an official stable JID-to-chat intent' in router and 'GroupAccessMethod.JID_DIRECT' in router,
@@ -120,7 +150,22 @@ checks = {
     'SQLite WAL tuning': 'PRAGMA synchronous=NORMAL' in db,
     'No backup': 'android:allowBackup="false"' in manifest,
     'No cleartext traffic': 'android:usesCleartextTraffic="false"' in manifest,
-    'Workflow artifact v2.14': 'UnifiedGroupMemory-2.14.0' in workflow,
+    'Profile-local identity key': all(x in profile_env for x in ['profileKey', 'Process.myUserHandle()', 'isManagedProfile', 'SAMSUNG_ISOLATED']),
+    'Work/Secure same-profile safety': 'لا يتم تجاوز Knox' in profile_env and 'يجب أن تكون نسخة AL-thmany وWhatsApp في ملف العمل نفسه' in profile_env,
+    'Profile-local Accessibility heartbeat': all(x in profile_access for x in ['profile_accessibility_runtime_v215', 'recordServiceConnected', 'recordEvent', 'recordRoot']),
+    'AUTO backend router': all(x in profile_router for x in ['RuntimeBackendKind.ACCESSIBILITY', 'RuntimeBackendKind.SHIZUKU', 'ProfileAccessibilityRuntime.snapshot']),
+    'Shizuku API/provider 13.1.5': all(x in app_build for x in ['dev.rikka.shizuku:api:13.1.5', 'dev.rikka.shizuku:provider:13.1.5']) and 'rikka.shizuku.ShizukuProvider' in manifest,
+    'Shizuku AIDL enabled': 'aidl = true' in app_build,
+    'Persistent Shizuku UiAutomation': all(x in shizuku_uia for x in ['rootInActiveWindow', 'setOnAccessibilityEventListener', 'injectInputEvent', 'ACTION_SET_TEXT']),
+    'Shizuku probe-first bridge': all(x in shizuku_bridge for x in ['fun probe', 'fastSnapshot', 'waitAndSnapshot', 'ensureBound']),
+    'Shizuku extraction fallback': all(x in extract for x in ['syncGroupsViaShizuku', 'runExtractionViaShizuku', 'extractDeepViaShizuku', 'Shizuku Event-first']),
+    'Shizuku publish fallback': 'shizukuMode' in publish and 'ShizukuBridge.ensureBound' in publish and 'openVerifiedGroupShizuku' in publish,
+    'Shizuku scan fallback': 'shizukuMode' in scan and 'ShizukuBridge.ensureBound' in scan and 'scanOneShizuku' in scan,
+    'Dynamic WhatsApp/clone discovery': all(x in registry for x in ['WHATSAPP_CLONED', 'queryIntentActivities', 'looksLikeWhatsApp', 'cacheProfile']),
+    'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
+    'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
+    'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
+    'Workflow artifact v2.15.0': 'HybridProfiles-2.15.0' in workflow,
 }
 
 for label, ok in checks.items():
@@ -141,4 +186,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.14.0 Unified Group Memory source contract: PASS')
+print('\nAL-thmany Extractor 2.15.0 Hybrid Profiles source contract: PASS')

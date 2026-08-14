@@ -45,5 +45,5 @@ fun main() {
     check(ScanSpeedProfile.HYPER.previewTimeoutMs >= 3_000L)
     check(ScanSpeedProfile.ADAPTIVE.previewTimeoutMs == 5_600L)
 
-    println("PureScanChecks v2.14: PASS")
+    println("PureScanChecks v2.15: PASS")
 }

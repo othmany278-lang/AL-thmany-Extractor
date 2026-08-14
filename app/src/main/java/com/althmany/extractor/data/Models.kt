@@ -76,7 +76,8 @@ data class GroupSyncCandidate(
     val whatsappPackage: String = "",
     val jidOrGroupId: String? = null,
     val syncOrder: Int = Int.MAX_VALUE,
-    val lastKnownAccessMethod: GroupAccessMethod = GroupAccessMethod.VISIBLE_LIST
+    val lastKnownAccessMethod: GroupAccessMethod = GroupAccessMethod.VISIBLE_LIST,
+    val verifiedGroupHint: Boolean = false
 )
 
 data class TargetGroup(
@@ -105,7 +106,9 @@ data class TargetGroup(
     val syncOrder: Int = Int.MAX_VALUE,
     val lastPublishStatus: String? = null,
     val lastPublishedAt: Long? = null,
-    val lastPublishError: String? = null
+    val lastPublishError: String? = null,
+    val syncGeneration: Long = 0L,
+    val stale: Boolean = false
 )
 
 

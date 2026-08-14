@@ -1,0 +1,7 @@
+AL-thmany v2.15 pure engine/profile checks: PASS
+PureScanChecks v2.15: PASS
+PurePublishChecks v2.15: OK
+PureRuntimeChecks: OK
+PureProfileChecks v2.15: PASS
+
+ALL PURE CHECKS: PASS

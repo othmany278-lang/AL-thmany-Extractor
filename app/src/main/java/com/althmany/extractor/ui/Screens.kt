@@ -335,7 +335,7 @@ private fun WhatsAppSelector(
                         )
                         Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                             Text(instance.labelAr, color = if (selected) NeonGreen else Color.White, fontWeight = FontWeight.Bold)
-                            Text(instance.packageName, style = MaterialTheme.typography.labelSmall, color = SoftText)
+                            Text("${instance.kind.name} • ${instance.packageName}", style = MaterialTheme.typography.labelSmall, color = SoftText)
                         }
                     }
                 }
@@ -351,6 +351,8 @@ fun HomeScreen(
     engine: ExtractionUiState,
     accessibilityEnabled: Boolean,
     onOpenAccessibility: () -> Unit,
+    onRequestShizuku: () -> Unit,
+    onProbeShizuku: () -> Unit,
     onOpenWhatsApp: () -> Unit,
     onStart: () -> Unit,
     onPause: () -> Unit,
@@ -378,7 +380,7 @@ fun HomeScreen(
         EngineStatus.RECOVERING,
         EngineStatus.PROFILE_MISMATCH
     )
-    val runtimeReady = accessibilityEnabled && engine.serviceConnected
+    val runtimeReady = (accessibilityEnabled && engine.serviceConnected) || engine.shizukuReady
 
     LazyColumn(
         modifier = Modifier
@@ -410,13 +412,14 @@ fun HomeScreen(
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                        Text("خدمة الاستخراج", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("محرك التشغيل", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         RuntimeStatusLine(
                             runtimeReady,
                             when {
-                                engine.serviceConnected -> "الخدمة متصلة وجاهزة"
-                                accessibilityEnabled -> "مفعلة — افتح واتساب مرة لتتصل الخدمة"
-                                else -> "الخدمة غير مفعلة"
+                                engine.serviceConnected -> "Accessibility متصلة وجاهزة"
+                                engine.shizukuReady -> "Shizuku جاهز كمسار بديل"
+                                accessibilityEnabled -> "Accessibility مفعلة — افتح واتساب مرة لتتصل"
+                                else -> "لا يوجد Backend جاهز بعد"
                             }
                         )
                     }
@@ -430,13 +433,34 @@ fun HomeScreen(
                     NeonSectionTitle("بيئة التشغيل") { Icon(Icons.Default.Groups, null, tint = NeonGreen) }
                     Text(engine.profileInfo.labelAr, color = NeonGreen, fontWeight = FontWeight.Bold)
                     Text(engine.profileInfo.detailAr, color = SoftText, textAlign = TextAlign.End)
+                    Text("Profile Key: ${engine.profileInfo.profileKey}", color = SoftText, style = MaterialTheme.typography.labelSmall)
                     HorizontalDivider(color = NeonBorder)
+                    RuntimeStatusLine(
+                        engine.profileAccessibilityConnected,
+                        if (engine.profileAccessibilityConnected) "Accessibility متصلة داخل نفس Profile" else "Accessibility غير متصلة محليًا بهذه البيئة"
+                    )
+                    RuntimeStatusLine(engine.shizukuReady, engine.shizukuDetail)
+                    Text("AUTO: ${engine.backendRecommendation}", color = NeonCyan, style = MaterialTheme.typography.bodySmall)
                     Text(
-                        "هذه النسخة تعمل فقط مع واتساب الموجود في نفس Profile. داخل ملف العمل أو المجلد الآمن ثبّت AL-thmany وواتساب في البيئة نفسها.",
+                        "الشخصي/العمل/المجلد الآمن تعمل بقاعدة نفس الملف الشخصي. Dual/Clone يظهر كهدف مستقل عندما يكشفه Android. Shizuku لا يتجاوز Knox؛ زر الاختبار يثبت إن كانت الواجهة مرئية فعلًا.",
                         style = MaterialTheme.typography.bodySmall,
                         color = SoftText,
                         textAlign = TextAlign.End
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        ChoicePill(
+                            label = "منح Shizuku",
+                            selected = engine.shizukuReady,
+                            modifier = Modifier.weight(1f),
+                            onClick = onRequestShizuku
+                        )
+                        ChoicePill(
+                            label = "اختبار Shizuku",
+                            selected = false,
+                            modifier = Modifier.weight(1f),
+                            onClick = onProbeShizuku
+                        )
+                    }
                 }
             }
         }
@@ -647,13 +671,13 @@ fun GroupsScreen(
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     NeonSectionTitle("القروبات الموجودة في واتساب") { Icon(Icons.Default.Sync, null, tint = NeonGreen) }
                     Text(
-                        "اختر نسخة واتساب من شاشة الاستخراج أولاً، ثم اضغط مزامنة. التطبيق يقرأ قائمة الدردشات تدريجيًا ويجمع الأسماء والحالة الظاهرة بدون فتح كل محادثة.",
+                        "اختر نسخة واتساب أولاً، ثم اضغط مزامنة. التطبيق يفعّل فلتر «المجموعات» الحقيقي في واتساب ويقرأ صفوف القروبات فقط. القروبات الجديدة تظهر بدون تحديد حتى تختارها بنفسك.",
                         color = SoftText,
                         textAlign = TextAlign.End,
                         style = MaterialTheme.typography.bodySmall
                     )
                     NeonActionButton(
-                        text = if (syncing) "جارٍ المزامنة… $syncFound" else "مزامنة القروبات من واتساب الحقيقي",
+                        text = if (syncing) "جارٍ المزامنة… $syncFound" else "مزامنة القروبات الحقيقية",
                         enabled = !syncing,
                         icon = { Icon(Icons.Default.Sync, null, tint = Color.White) },
                         onClick = onSync
@@ -1051,7 +1075,7 @@ fun ScanScreen(
                                 )
                                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                                     Text(instance.labelAr, fontWeight = FontWeight.Bold)
-                                    Text(instance.packageName, style = MaterialTheme.typography.labelSmall, color = SoftText)
+                                    Text("${instance.kind.name} • ${instance.packageName}", style = MaterialTheme.typography.labelSmall, color = SoftText)
                                 }
                             }
                         }

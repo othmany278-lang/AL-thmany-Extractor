@@ -20,6 +20,12 @@ import com.althmany.extractor.data.TargetGroup
 import com.althmany.extractor.notification.ExtractionNotifier
 import com.althmany.extractor.profile.RuntimeProfileDetector
 import com.althmany.extractor.profile.ProfileLaunchPolicy
+import com.althmany.extractor.profile.ProfileAccessibilityRuntime
+import com.althmany.extractor.profile.NativeProfileEngineRouter
+import com.althmany.extractor.shizuku.ShizukuBridge
+import com.althmany.extractor.shizuku.ShizukuUiRuntime
+import com.althmany.extractor.shizuku.ShizukuUiTree
+import com.althmany.extractor.profile.RuntimeBackendKind
 import com.althmany.extractor.profile.WhatsAppInstanceRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.BufferOverflow
@@ -54,6 +60,7 @@ object ExtractionController {
     private val uiEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val adapter = WhatsAppUiAdapter()
     private val accessRouter = GroupAccessRouter(adapter)
+    private val shizukuUi: ShizukuUiRuntime by lazy { ShizukuUiRuntime(appContext) }
     private var service: WhatsAppAccessibilityService? = null
     private var runJob: Job? = null
     private var allowIncompleteCheckpointResume: Boolean = false
@@ -105,16 +112,49 @@ object ExtractionController {
     fun refreshRuntimeEnvironment() {
         if (!::appContext.isInitialized || !::settingsStore.isInitialized) return
         val profile = RuntimeProfileDetector.detect(appContext)
-        val available = WhatsAppInstanceRegistry.launchable(appContext)
+        val available = WhatsAppInstanceRegistry.launchable(appContext, forceRefresh = true)
         val saved = settingsStore.get().targetWhatsAppPackage
         val selected = ProfileLaunchPolicy.resolveSelected(saved, available.map { it.packageName })
         if (selected != null && selected != saved) settingsStore.setTargetWhatsAppPackage(selected)
+        val localAccess = ProfileAccessibilityRuntime.snapshot(appContext)
+        val shizuku = runCatching { ShizukuBridge.status() }.getOrNull()
+        val route = NativeProfileEngineRouter.inspect(appContext)
         _state.value = _state.value.copy(
             profileInfo = profile,
             availableWhatsApp = available,
             selectedWhatsAppPackage = selected,
-            packageMismatch = false
+            packageMismatch = false,
+            profileAccessibilityConnected = localAccess.localServiceConnected,
+            shizukuReady = shizuku?.ready == true,
+            shizukuDetail = when {
+                shizuku == null || !shizuku.binderAlive -> "Shizuku غير شغّال"
+                !shizuku.permissionGranted -> "Shizuku يحتاج إذن"
+                shizuku.userServiceBound -> "Shizuku متصل + UserService"
+                else -> "Shizuku جاهز للربط"
+            },
+            backendRecommendation = "${route.recommended.name}: ${route.reason}"
         )
+    }
+
+    fun requestShizukuPermission(): Boolean {
+        val requested = runCatching { ShizukuBridge.requestPermission() }.getOrDefault(false)
+        scope.launch {
+            delay(500L)
+            refreshRuntimeEnvironment()
+            _state.value = _state.value.copy(message = if (requested) "تم طلب إذن Shizuku — وافق ثم اضغط اختبار" else "تعذر طلب إذن Shizuku")
+        }
+        return requested
+    }
+
+    fun probeShizuku() {
+        if (!::appContext.isInitialized) return
+        scope.launch {
+            val target = _state.value.selectedWhatsAppPackage
+            _state.value = _state.value.copy(message = "اختبار Shizuku داخل ${_state.value.profileInfo.labelAr}…")
+            val detail = runCatching { ShizukuBridge.probe(appContext, target) }.getOrElse { "Shizuku probe error: ${it.message}" }
+            refreshRuntimeEnvironment()
+            _state.value = _state.value.copy(message = detail, shizukuDetail = detail.take(220))
+        }
     }
 
     fun setTargetWhatsAppPackage(packageName: String): Boolean {
@@ -275,9 +315,9 @@ object ExtractionController {
     }
 
     /**
-     * Best-effort Android equivalent of WA-Workspace sync. It collects conversation titles from the
-     * WhatsApp list up to 4000 items. Because Android cannot read WhatsApp's private group database,
-     * auto-discovered names are marked unverified and are group-validated before extraction.
+     * Android group synchronization. The runtime first activates WhatsApp's real Groups filter, then
+     * collects only chat rows from the main list. System cards/filter chips are never persisted, new
+     * discoveries start unselected, and group identity is trusted only when the Groups filter applied.
      */
     suspend fun syncGroupsNow(): Int {
         if (ScanController.isRunning() || PublishController.isRunning()) {
@@ -293,48 +333,96 @@ object ExtractionController {
         val timing = ExtractionPolicy.timing(prefs.speed)
         _state.value = _state.value.copy(status = EngineStatus.SYNCING_GROUPS, message = "مزامنة القروبات من واتساب", syncFound = 0)
         if (!openWhatsApp()) throw IllegalStateException("تعذر فتح واتساب المحدد داخل البيئة الحالية")
-        val svc = awaitRuntimeService(5_000L)
-            ?: throw IllegalStateException("تم فتح واتساب لكن خدمة Accessibility لم تتصل بالمحرك داخل نفس البيئة")
+        val svc = awaitRuntimeService(1_200L)
+        if (svc == null) {
+            if (ShizukuBridge.status().ready) {
+                return syncGroupsViaShizuku(timing)
+            }
+            throw IllegalStateException("تم فتح واتساب لكن لا Accessibility محلية ولا Shizuku جاهز داخل نفس البيئة")
+        }
         awaitUiChange(timing.groupOpenMs)
 
         // Recover from a chat/info/search screen to the main list without assuming a specific WhatsApp layout.
-        for (attempt in 0 until 3) {
+        for (attempt in 0 until 4) {
             val root = svc.currentRoot()
-            if (adapter.collectChatListCandidates(root).size >= 2) break
+            if (adapter.isConversationListVisible(root)) break
             svc.performBack()
             awaitUiChange(timing.searchOpenMs)
+        }
+        if (!adapter.isConversationListVisible(svc.currentRoot())) {
+            throw IllegalStateException("تعذر الوصول إلى قائمة الدردشات الرئيسية في واتساب")
+        }
+
+        // The reference videos show the real WhatsApp Groups chip. Use it as the authoritative
+        // group boundary instead of guessing group-vs-private from arbitrary clickable labels.
+        val groupsFilterApplied = activateGroupsOnlyFilter(svc, timing)
+        if (!groupsFilterApplied) {
+            throw IllegalStateException("لم يظهر فلتر المجموعات في واتساب؛ أوقفت المزامنة الآمنة بدل حفظ محادثات خاصة كقروبات")
         }
 
         val found = linkedMapOf<String, GroupSyncCandidate>()
         val initialVisibleNames = adapter.collectChatListCandidates(svc.currentRoot()).take(8).toSet()
 
-        // Archived is normally reachable near the top of the main chat list, so scan it before the
-        // main list is moved toward its end. Then return and continue with the normal chat list.
-        if (adapter.openArchived(svc.currentRoot())) {
-            awaitUiChange(timing.groupOpenMs)
-            repository.log(null, "INFO", "sync-archived", "بدء فحص المحادثات المؤرشفة")
-            scanConversationList(svc, timing, found)
-            svc.performBack()
-            awaitUiChange(timing.searchOpenMs)
-        }
+        // Scan the group-filtered main list first. Archived is optional; only scan it when WhatsApp
+        // exposes the same Groups filter there, otherwise skip it rather than polluting GroupRecord.
         scanConversationList(svc, timing, found)
         restoreConversationListPosition(svc, timing, initialVisibleNames)
+        if (adapter.openArchived(svc.currentRoot())) {
+            awaitUiChange(timing.groupOpenMs)
+            if (activateGroupsOnlyFilter(svc, timing)) {
+                repository.log(null, "INFO", "sync-archived-groups", "فحص القروبات المؤرشفة عبر فلتر المجموعات")
+                scanConversationList(svc, timing, found)
+            } else {
+                repository.log(null, "INFO", "sync-archived-skip", "تم تخطي المؤرشفة لأن فلتر المجموعات غير متاح هناك")
+            }
+            svc.performBack()
+            awaitUiChange(timing.searchOpenMs)
+            activateGroupsOnlyFilter(svc, timing)
+        }
+
+        if (found.isEmpty()) {
+            throw IllegalStateException("فلتر المجموعات فُتح لكن لم أستطع قراءة أي صف قروب؛ تم الحفاظ على قاعدة القروبات القديمة بدون تعديل")
+        }
+
         val syncPackage = requireSelectedPackage()
+        val syncGeneration = System.currentTimeMillis()
         val unifiedCandidates = found.values.mapIndexed { index, candidate ->
             candidate.copy(
                 whatsappPackage = syncPackage,
                 syncOrder = index,
-                lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST
+                lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST,
+                verifiedGroupHint = true
             )
         }
-        val added = repository.addDiscoveredGroupCandidates(unifiedCandidates)
-        repository.log(null, "INFO", "sync-complete", "اكتشفت ${found.size} محادثة مرشحة، جديد منها $added")
-        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت المزامنة: ${found.size}", syncFound = found.size)
+        val added = repository.addDiscoveredGroupCandidates(unifiedCandidates, syncGeneration)
+        repository.finalizeGroupSync(syncPackage, syncGeneration)
+        repository.log(null, "INFO", "sync-complete", "تمت مزامنة ${found.size} قروب حقيقي عبر فلتر المجموعات، جديد منها $added")
+        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت مزامنة القروبات: ${found.size} — حدد ما تريد ثم ابدأ", syncFound = found.size)
         refreshStats()
         return added
             } finally {
             RuntimeOperationCoordinator.release(RuntimeOperation.EXTRACTION)
         }
+    }
+
+    private suspend fun activateGroupsOnlyFilter(
+        svc: WhatsAppAccessibilityService,
+        timing: TimingPolicy
+    ): Boolean {
+        val root = svc.currentRoot() ?: return false
+        if (adapter.isGroupsFilterActive(root)) return true
+        val before = adapter.snapshot(root).signature
+        val clicked = adapter.activateGroupsFilter(root) ||
+            svc.tapBounds(adapter.groupsFilterBounds(root), timing.gestureDurationMs)
+        if (!clicked) return false
+        awaitUiChange(timing.searchOpenMs)
+        // Some WhatsApp builds do not expose selected/checked on filter chips. A successful exact
+        // chip click is enough; content change or selected state merely strengthens the evidence.
+        val afterRoot = svc.currentRoot()
+        val after = adapter.snapshot(afterRoot).signature
+        val active = adapter.isGroupsFilterActive(afterRoot)
+        repository.log(null, "INFO", "groups-filter", "clicked=$clicked active=$active changed=${before != after}")
+        return active || before != after
     }
 
     private suspend fun scanConversationList(
@@ -365,7 +453,7 @@ object ExtractionController {
                     communityParentHint = previous.communityParentHint || candidate.communityParentHint
                 )
             }
-            _state.value = _state.value.copy(syncFound = found.size, message = "تمت مزامنة ${found.size} محادثة — قراءة القائمة مستمرة")
+            _state.value = _state.value.copy(syncFound = found.size, message = "تمت مزامنة ${found.size} قروب — قراءة قائمة المجموعات مستمرة")
 
             stableRounds = if (snapshot.signature == lastSignature && before == found.size) stableRounds + 1 else 0
             lastSignature = snapshot.signature
@@ -421,8 +509,13 @@ object ExtractionController {
                 return
             }
             _state.value = _state.value.copy(status = EngineStatus.OPENING_WHATSAPP, message = "فتح ${WhatsAppInstanceRegistry.labelFor(requireSelectedPackage())} داخل ${_state.value.profileInfo.labelAr}")
-            if (awaitRuntimeService(5_000L) == null) {
-                failRun("تم فتح واتساب لكن خدمة Accessibility لم تتصل بالمحرك داخل نفس البيئة")
+            val liveAccessibility = awaitRuntimeService(1_200L)
+            if (liveAccessibility == null) {
+                if (ShizukuBridge.status().ready) {
+                    runExtractionViaShizuku(groups, prefs, targetPackage)
+                    return
+                }
+                failRun("تم فتح واتساب لكن لا Accessibility محلية ولا Shizuku جاهز داخل نفس البيئة")
                 return
             }
             awaitUiChange(ExtractionPolicy.timing(prefs.speed).groupOpenMs)
@@ -613,7 +706,9 @@ object ExtractionController {
         val svc = service ?: return false
         val timing = ExtractionPolicy.timing(prefs.speed)
         val root = svc.currentRoot() ?: return false
-        if (!adapter.openCurrentChatInfo(root, group.name)) return false
+        val openedInfo = adapter.openCurrentChatInfo(root, group.name) ||
+            svc.tapBounds(adapter.currentChatHeaderBounds(root, group.name), timing.gestureDurationMs)
+        if (!openedInfo) return false
         awaitUiChange(timing.groupOpenMs)
         val isGroup = adapter.isGroupInfoScreen(svc.currentRoot())
         svc.performBack(); awaitUiChange(timing.searchOpenMs)
@@ -623,7 +718,10 @@ object ExtractionController {
     private suspend fun extractViaLinksTab(group: TargetGroup, prefs: ExtractionPreferences): Boolean {
         val svc = service ?: return false
         val timing = ExtractionPolicy.timing(prefs.speed)
-        if (!adapter.openCurrentChatInfo(svc.currentRoot(), group.name)) return false
+        val infoRoot = svc.currentRoot() ?: return false
+        val openedInfo = adapter.openCurrentChatInfo(infoRoot, group.name) ||
+            svc.tapBounds(adapter.currentChatHeaderBounds(infoRoot, group.name), timing.gestureDurationMs)
+        if (!openedInfo) return false
         awaitUiChange(timing.groupOpenMs)
         if (!adapter.openMediaLinksDocs(svc.currentRoot())) { svc.performBack(); awaitUiChange(timing.searchOpenMs); return false }
         awaitUiChange(timing.groupOpenMs)
@@ -894,7 +992,7 @@ object ExtractionController {
         val timing = ExtractionPolicy.timing(prefs.speed)
         val root = svc.currentRoot()
         // Avoid an unnecessary Back if recovery already returned us to a populated chat/search list.
-        if (adapter.collectChatListCandidates(root).size >= 2) return
+        if (adapter.isConversationListVisible(root)) return
         svc.performBack()
         awaitUiChange(timing.searchOpenMs)
     }
@@ -974,6 +1072,356 @@ object ExtractionController {
         _state.value = _state.value.copy(status = EngineStatus.ERROR, message = message)
         notifier.show(_state.value, ongoing = false)
         refreshStats()
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Shizuku profile-local fallback. It is used only after Accessibility
+    // fails to bind locally and Shizuku has explicit user permission.
+    // ---------------------------------------------------------------------
+
+    private suspend fun awaitShizukuTree(packageName: String, timeoutMs: Long = 5_000L): ShizukuUiTree? {
+        if (!ShizukuBridge.status().ready || !ShizukuBridge.ensureBound(appContext)) return null
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val tree = shizukuUi.snapshot(packageName)
+            if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName) && tree.nodes.isNotEmpty()) return tree
+            delay(90L)
+        }
+        val last = shizukuUi.snapshot(packageName)
+        return last.takeIf { it.state == "OK" && shizukuUi.isWhatsApp(it, packageName) && it.nodes.isNotEmpty() }
+    }
+
+    private suspend fun syncGroupsViaShizuku(timing: TimingPolicy): Int {
+        val packageName = requireSelectedPackage()
+        _state.value = _state.value.copy(message = "Shizuku: ربط واجهة ${WhatsAppInstanceRegistry.labelFor(packageName)}")
+        ShizukuBridge.reset(appContext)
+        var tree = awaitShizukuTree(packageName)
+            ?: throw IllegalStateException("Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile")
+
+        for (attempt in 0 until 4) {
+            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) break
+            shizukuUi.back()
+            delay(timing.searchOpenMs.coerceAtMost(300L))
+            tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+        }
+        if (shizukuUi.collectChatCandidates(tree, packageName).size < 2) {
+            throw IllegalStateException("Shizuku يرى واتساب لكن تعذر الوصول إلى قائمة الدردشات")
+        }
+
+        val filterClicked = shizukuUi.clickGroupsFilter(tree, packageName)
+        if (!filterClicked) throw IllegalStateException("Shizuku لم يجد فلتر المجموعات؛ أوقفت المزامنة لحماية قاعدة GroupRecord")
+        delay(timing.searchOpenMs.coerceAtMost(350L))
+        tree = awaitShizukuTree(packageName, 1_200L) ?: throw IllegalStateException("اختفت واجهة واتساب بعد فلتر المجموعات")
+
+        val found = linkedMapOf<String, GroupSyncCandidate>()
+        var stable = 0
+        var lastSignature = Int.MIN_VALUE
+        var sequence = shizukuUi.eventSequence(packageName)
+        for (iteration in 0 until 1_000) {
+            awaitIfPaused()
+            val beforeCount = found.size
+            shizukuUi.collectChatCandidates(tree, packageName).forEach { c ->
+                val key = c.name.lowercase()
+                val prev = found[key]
+                found[key] = if (prev == null) c else prev.copy(
+                    unreadCount = maxOf(prev.unreadCount, c.unreadCount),
+                    activityText = prev.activityText ?: c.activityText,
+                    active = prev.active || c.active,
+                    publishableHint = prev.publishableHint || c.publishableHint,
+                    communityParentHint = prev.communityParentHint || c.communityParentHint
+                )
+            }
+            _state.value = _state.value.copy(syncFound = found.size, message = "Shizuku: تمت قراءة ${found.size} قروب")
+            stable = if (tree.signature == lastSignature && beforeCount == found.size) stable + 1 else 0
+            lastSignature = tree.signature
+            if (stable >= 3 || found.size >= ExtractionPolicy.MAX_SYNC_ITEMS) break
+            val moved = shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())
+            if (!moved) stable++
+            val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(40))
+            sequence = frame.first
+            tree = frame.second.takeIf { it.state == "OK" } ?: shizukuUi.snapshot(packageName)
+        }
+        if (found.isEmpty()) throw IllegalStateException("Shizuku لم يستخرج أي صف قروب من قائمة المجموعات")
+
+        val generation = System.currentTimeMillis()
+        val candidates = found.values.mapIndexed { index, c ->
+            c.copy(
+                whatsappPackage = packageName,
+                syncOrder = index,
+                lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST,
+                verifiedGroupHint = true
+            )
+        }
+        val added = repository.addDiscoveredGroupCandidates(candidates, generation)
+        repository.finalizeGroupSync(packageName, generation)
+        repository.log(null, "INFO", "sync-shizuku-complete", "Shizuku UIAutomation: groups=${found.size} added=$added profile=${_state.value.profileInfo.profileKey}")
+        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت مزامنة Shizuku: ${found.size} — حدد القروبات ثم ابدأ", syncFound = found.size)
+        refreshStats()
+        return added
+    }
+
+    private suspend fun runExtractionViaShizuku(
+        initialGroups: List<TargetGroup>,
+        prefs: ExtractionPreferences,
+        targetPackage: String
+    ) {
+        if (!ShizukuBridge.ensureBound(appContext)) {
+            failRun("Shizuku غير قادر على إنشاء UserService داخل هذه البيئة")
+            return
+        }
+        ShizukuBridge.reset(appContext)
+        if (awaitShizukuTree(targetPackage) == null) {
+            failRun("Shizuku جاهز لكن UIAutomation لا يرى ${WhatsAppInstanceRegistry.labelFor(targetPackage)} في هذا Profile")
+            return
+        }
+        val groups = repository.pendingSelectedGroups(targetPackage).ifEmpty { initialGroups }
+        _state.value = _state.value.copy(message = "Shizuku Event-first • ${groups.size} قروب", runGroupCount = groups.size)
+        groups.forEachIndexed { index, group ->
+            awaitIfPaused()
+            if (!stateStore.active) return
+            stateStore.currentGroupId = group.id
+            stateStore.currentGroupName = group.name
+            _state.value = _state.value.copy(currentGroup = group.name, currentGroupIndex = index + 1, runGroupCount = groups.size, linksFoundThisGroup = 0, retry = 0, phaseDetail = "SHIZUKU")
+            notifier.show(_state.value)
+
+            var success = false
+            var notGroup = false
+            var lastError: String? = null
+            for (attempt in 1..prefs.maxSameGroupRetries) {
+                _state.value = _state.value.copy(retry = attempt, status = EngineStatus.OPENING_GROUP, message = "Shizuku: فتح ${group.name} • $attempt/${prefs.maxSameGroupRetries}")
+                val opened = openGroupViaShizuku(group, prefs, targetPackage)
+                if (!opened) {
+                    lastError = "تعذر فتح القروب عبر Shizuku"
+                    recoverShizukuToList(targetPackage, prefs)
+                    continue
+                }
+                if (!group.verifiedGroup && group.discovered) {
+                    val verified = verifyGroupViaShizuku(group, targetPackage, prefs)
+                    if (!verified) { notGroup = true; break }
+                }
+                val result = runCatching {
+                    when (prefs.mode) {
+                        ExtractionMode.LINKS_TAB -> extractLinksTabViaShizuku(group, prefs, targetPackage)
+                        ExtractionMode.SMART -> {
+                            runCatching { extractDeepViaShizuku(group, prefs.copy(mode = ExtractionMode.DEEP), targetPackage) }
+                                .getOrElse {
+                                    repository.log(group.name, "WARN", "shizuku-smart-links-fallback", it.message ?: "deep failed")
+                                    if (!extractLinksTabViaShizuku(group, prefs.copy(mode = ExtractionMode.LINKS_TAB), targetPackage)) throw it
+                                }
+                        }
+                        else -> extractDeepViaShizuku(group, prefs, targetPackage)
+                    }
+                }
+                if (result.isSuccess) { success = true; break }
+                lastError = result.exceptionOrNull()?.message
+                repository.log(group.name, "WARN", "shizuku-same-group-retry", lastError ?: "unknown")
+                recoverShizukuToList(targetPackage, prefs)
+            }
+            when {
+                success -> repository.updateStatus(group.id, GroupStatus.COMPLETED)
+                notGroup -> repository.updateStatus(group.id, GroupStatus.SKIPPED_NOT_GROUP, "Shizuku: المحادثة ليست قروبًا مؤكداً")
+                else -> repository.updateStatus(group.id, GroupStatus.FAILED_FINAL, lastError ?: "Shizuku failure")
+            }
+            refreshStatsAndNotify()
+            recoverShizukuToList(targetPackage, prefs)
+        }
+        finishRun("اكتمل الاستخراج عبر Shizuku")
+    }
+
+    private suspend fun openGroupViaShizuku(group: TargetGroup, prefs: ExtractionPreferences, packageName: String): Boolean {
+        val timing = ExtractionPolicy.timing(prefs.speed)
+        var tree = awaitShizukuTree(packageName, 1_200L) ?: return false
+        if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+            repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.CURRENT_CHAT)
+            return true
+        }
+        for (attempt in 0 until 4) {
+            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) break
+            shizukuUi.back()
+            delay(timing.searchOpenMs.coerceAtMost(260L))
+            tree = awaitShizukuTree(packageName, 900L) ?: tree
+        }
+        if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
+            delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+            if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.VISIBLE_LIST); return true }
+        }
+
+        var sequence = shizukuUi.eventSequence(packageName)
+        var stable = 0
+        for (pass in 0 until 280) {
+            tree = awaitShizukuTree(packageName, 700L) ?: continue
+            if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
+                val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(40)); sequence = frame.first; tree = frame.second
+                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
+            }
+            val before = tree.signature
+            if (!shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())) stable++
+            val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(40)); sequence = frame.first; val next = frame.second
+            stable = if (next.signature == before) stable + 1 else 0; tree = next
+            if (stable >= 3) break
+        }
+
+        var backwardStable = 0
+        for (pass in 0 until 180) {
+            tree = awaitShizukuTree(packageName, 700L) ?: continue
+            if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
+                delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: tree
+                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH); return true }
+            }
+            val before = tree.signature
+            val moved = shizukuUi.swipeListBackward(tree, timing.gestureDurationMs.toInt())
+            delay(timing.eventQuietMs.coerceAtMost(120L))
+            val next = awaitShizukuTree(packageName, 700L) ?: tree
+            backwardStable = if (!moved || next.signature == before) backwardStable + 1 else 0
+            tree = next
+            if (backwardStable >= 3) break
+        }
+
+        // Search remains the final fallback, exactly like the Accessibility router.
+        tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (shizukuUi.clickSearch(tree, packageName)) {
+            delay(timing.searchOpenMs.coerceAtMost(250L))
+            if (shizukuUi.setSearchText(packageName, group.name)) {
+                delay(timing.searchResultMs.coerceAtMost(400L))
+                tree = awaitShizukuTree(packageName, 1_000L) ?: return false
+                if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
+                    delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: tree
+                    if (shizukuUi.isGroupVisible(tree, group.name, packageName)) { repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SEARCH_FALLBACK); return true }
+                }
+            }
+        }
+        repository.recordGroupAccessFailure(group.id, GroupAccessMethod.SEARCH_FALLBACK)
+        return false
+    }
+
+    private suspend fun verifyGroupViaShizuku(group: TargetGroup, packageName: String, prefs: ExtractionPreferences): Boolean {
+        var tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (!shizukuUi.isGroupVisible(tree, group.name, packageName)) return false
+        if (!shizukuUi.clickHeader(tree, group.name, packageName)) return false
+        delay(ExtractionPolicy.timing(prefs.speed).groupOpenMs.coerceAtMost(350L))
+        tree = awaitShizukuTree(packageName, 1_000L) ?: return false
+        val verified = shizukuUi.isGroupInfo(tree)
+        shizukuUi.back(); delay(180L)
+        if (verified) repository.updateGroupCapabilities(group.id, verified = true, active = true, publishable = !group.communityParent, communityParent = group.communityParent)
+        return verified
+    }
+
+    private suspend fun extractDeepViaShizuku(group: TargetGroup, prefs: ExtractionPreferences, packageName: String) {
+        val timing = ExtractionPolicy.timing(prefs.speed)
+        var tree = awaitShizukuTree(packageName, 1_000L) ?: error("Shizuku UI root unavailable")
+        if (!shizukuUi.isGroupVisible(tree, group.name, packageName)) error("Shizuku خرج من القروب قبل الاستخراج")
+        val newest = shizukuUi.toNodeSnapshot(tree)
+        val prior = repository.checkpoint(group.name)
+        val previousNewAnchor = prior?.takeIf { it.completed && prefs.mode == ExtractionMode.NEW_ONLY }?.anchorTokens.orEmpty()
+        val nextNewAnchor = newest.anchorTokens
+        val seen = hashSetOf<String>()
+        var totalNew = 0
+        var iterations = 0
+        var quietRounds = 0
+        var sequence = shizukuUi.eventSequence(packageName)
+        _state.value = _state.value.copy(status = EngineStatus.EXTRACTING, message = "Shizuku Event-first: قراءة وسحب الرسائل الأقدم")
+
+        while (stateStore.active && iterations < prefs.maxScrollIterations) {
+            awaitIfPaused()
+            if (!shizukuUi.isGroupVisible(tree, group.name, packageName)) error("Shizuku فقد محادثة القروب أثناء الاستخراج")
+            val before = shizukuUi.toNodeSnapshot(tree)
+            val added = captureShizukuLinks(group, tree, seen)
+            totalNew += added
+            if (prefs.mode == ExtractionMode.NEW_ONLY && previousNewAnchor.isNotEmpty() && before.matchesAnchor(previousNewAnchor)) break
+            if (prefs.mode == ExtractionMode.NEW_ONLY && shizukuUi.unreadDividerVisible(tree) && iterations >= 1) break
+
+            if (shizukuUi.olderLoaderVisible(tree) && shizukuUi.clickOlderLoader(tree, packageName)) {
+                val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(50)); sequence = frame.first; tree = frame.second
+                continue
+            }
+            val moved = shizukuUi.swipeOlder(tree, timing.gestureDurationMs.toInt())
+            val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(50))
+            sequence = frame.first
+            val next = frame.second.takeIf { it.state == "OK" } ?: shizukuUi.snapshot(packageName)
+            val afterAdded = captureShizukuLinks(group, next, seen)
+            totalNew += afterAdded
+            val changed = next.contentSignature != before.contentSignature
+            iterations++
+            stateStore.currentIteration = iterations
+            quietRounds = if (!moved || (!changed && added + afterAdded == 0)) quietRounds + 1 else 0
+            tree = next
+            updateProgress(totalNew, "Shizuku • سحب $iterations • $totalNew رابط جديد")
+
+            if (iterations % 6 == 0 && prefs.mode != ExtractionMode.NEW_ONLY) {
+                val snap = shizukuUi.toNodeSnapshot(tree)
+                repository.saveCheckpoint(GroupCheckpoint(group.name, snap.anchorTokens, snap.contentSignature, iterations, totalNew, prefs.mode, false, System.currentTimeMillis()))
+            }
+            if (iterations % 4 == 0) refreshStatsAndNotify()
+
+            if (quietRounds >= 4) {
+                // Strict extra proof passes: three more event-first swipes must produce no new content.
+                var proof = true
+                repeat(3) {
+                    val proofBefore = shizukuUi.toNodeSnapshot(tree)
+                    shizukuUi.swipeOlder(tree, timing.gestureDurationMs.toInt())
+                    val pf = shizukuUi.waitFrame(packageName, sequence, maxOf(timing.eventQuietMs.toInt(), 80)); sequence = pf.first
+                    val proofTree = pf.second.takeIf { it.state == "OK" } ?: shizukuUi.snapshot(packageName)
+                    val proofNew = captureShizukuLinks(group, proofTree, seen); totalNew += proofNew
+                    if (proofTree.contentSignature != proofBefore.contentSignature || proofNew > 0) proof = false
+                    tree = proofTree
+                }
+                if (proof) break else quietRounds = 0
+            }
+        }
+        if (iterations >= prefs.maxScrollIterations) error("Shizuku بلغ حد الحماية بدون إثبات نهاية المحادثة")
+        val finalSnap = shizukuUi.toNodeSnapshot(tree)
+        repository.saveCheckpoint(GroupCheckpoint(group.name, if (prefs.mode == ExtractionMode.NEW_ONLY) nextNewAnchor else finalSnap.anchorTokens, if (prefs.mode == ExtractionMode.NEW_ONLY) newest.contentSignature else finalSnap.contentSignature, iterations, totalNew, prefs.mode, true, System.currentTimeMillis()))
+        repository.log(group.name, "INFO", "shizuku-group-completed", "iterations=$iterations newLinks=$totalNew")
+        updateProgress(totalNew, "اكتمل القروب عبر Shizuku • $totalNew رابط جديد")
+    }
+
+    private suspend fun extractLinksTabViaShizuku(group: TargetGroup, prefs: ExtractionPreferences, packageName: String): Boolean {
+        val timing = ExtractionPolicy.timing(prefs.speed)
+        var tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (!shizukuUi.clickHeader(tree, group.name, packageName)) return false
+        delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (!shizukuUi.openMediaLinks(tree, packageName)) { shizukuUi.back(); return false }
+        delay(timing.groupOpenMs.coerceAtMost(350L)); tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (!shizukuUi.openLinksTab(tree, packageName)) { shizukuUi.back(); shizukuUi.back(); return false }
+        delay(timing.hardSettleMs.coerceAtMost(450L)); tree = awaitShizukuTree(packageName, 900L) ?: return false
+        if (!shizukuUi.linksTabLooksOpen(tree)) return false
+        val seen = hashSetOf<String>(); var total = 0; var quiet = 0; var seq = shizukuUi.eventSequence(packageName)
+        for (iteration in 0 until prefs.maxScrollIterations) {
+            val before = tree.contentSignature
+            total += captureShizukuLinks(group, tree, seen)
+            shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())
+            val frame = shizukuUi.waitFrame(packageName, seq, timing.eventQuietMs.toInt().coerceAtLeast(50))
+            seq = frame.first
+            val next = frame.second.takeIf { it.state == "OK" } ?: shizukuUi.snapshot(packageName)
+            val newlyFound = captureShizukuLinks(group, next, seen)
+            total += newlyFound
+            quiet = if (next.contentSignature == before && newlyFound == 0) quiet + 1 else 0
+            tree = next
+            if (quiet >= 4) break
+        }
+        shizukuUi.back(); delay(120L); shizukuUi.back(); delay(120L)
+        repository.log(group.name, "INFO", "shizuku-links-tab-completed", "newLinks=$total")
+        return true
+    }
+
+    private suspend fun captureShizukuLinks(group: TargetGroup, tree: ShizukuUiTree, seen: MutableSet<String>): Int {
+        val batch = ArrayList<LinkCandidate>()
+        shizukuUi.collectUrls(tree).forEach { url ->
+            val normalized = LinkExtractor.normalize(url)
+            if (normalized.isBlank() || !seen.add(normalized)) return@forEach
+            batch += LinkCandidate(url, normalized, LinkExtractor.category(normalized), LinkExtractor.inviteCode(normalized))
+        }
+        return repository.saveLinksBatch(batch, group)
+    }
+
+    private suspend fun recoverShizukuToList(packageName: String, prefs: ExtractionPreferences) {
+        val delayMs = ExtractionPolicy.timing(prefs.speed).searchOpenMs.coerceAtMost(220L)
+        repeat(4) {
+            val tree = awaitShizukuTree(packageName, 700L) ?: return@repeat
+            if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) return
+            shizukuUi.back(); delay(delayMs)
+        }
     }
 
     private fun selectedPackageOrNull(): String? = _state.value.selectedWhatsAppPackage

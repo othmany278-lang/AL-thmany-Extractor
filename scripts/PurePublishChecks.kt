@@ -13,5 +13,5 @@ fun main() {
     check(PublishSpeedProfile.entries.all { it.betweenGroupsMs >= 1_000L })
     check(PublishSpeedProfile.entries.none { it.labelAr.contains("0.32") })
     check(PublishContentMode.entries.count { it.attachmentRequired } == 3)
-    println("PurePublishChecks v2.14: OK")
+    println("PurePublishChecks v2.15: OK")
 }

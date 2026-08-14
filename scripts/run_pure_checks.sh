@@ -44,4 +44,12 @@ kotlinc \
   -include-runtime -d "$TMP/runtime.jar"
 java -jar "$TMP/runtime.jar"
 
+kotlinc \
+  app/src/main/java/com/althmany/extractor/profile/ProfileLaunchPolicy.kt \
+  app/src/main/java/com/althmany/extractor/profile/ProfileControlPolicy.kt \
+  app/src/main/java/com/althmany/extractor/profile/DualMessengerMatcher.kt \
+  scripts/PureProfileChecks.kt \
+  -include-runtime -d "$TMP/profile.jar"
+java -jar "$TMP/profile.jar"
+
 printf '\nALL PURE CHECKS: PASS\n'

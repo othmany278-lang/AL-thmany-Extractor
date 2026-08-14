@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -13,6 +14,7 @@ import com.althmany.extractor.engine.RuntimeOperation
 import com.althmany.extractor.engine.RuntimeOperationCoordinator
 import com.althmany.extractor.engine.ScanController
 import com.althmany.extractor.profile.WhatsAppInstanceRegistry
+import com.althmany.extractor.profile.ProfileAccessibilityRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +59,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         // A delivered AccessibilityEvent is definitive proof that this exact service instance is
         // alive in the current Android user/profile. This self-heals delayed Samsung callbacks.
         AccessibilityRuntimeBridge.event(this, packageName)
+        packageName?.let { ProfileAccessibilityRuntime.recordEvent(this, it) }
         attachControllers()
 
         if (!WhatsAppInstanceRegistry.isSupportedPackage(packageName)) return
@@ -78,6 +81,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     private fun bindRuntime() {
         AccessibilityRuntimeBridge.bind(this)
+        ProfileAccessibilityRuntime.recordServiceConnected(this)
         attachControllers()
     }
 
@@ -85,6 +89,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         fallbackPollJob?.cancel()
         fallbackPollJob = null
         AccessibilityRuntimeBridge.unbind(this)
+        ProfileAccessibilityRuntime.markDisconnected(this)
         ExtractionController.detachService(this)
         ScanController.detachService(this)
         PublishController.detachService(this)
@@ -130,10 +135,26 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     fun currentRoot(): AccessibilityNodeInfo? {
         AccessibilityRuntimeBridge.heartbeat()
-        return rootInActiveWindow
+        ProfileAccessibilityRuntime.heartbeat(this)
+        val root = rootInActiveWindow
+        ProfileAccessibilityRuntime.recordRoot(this, root != null, root?.packageName?.toString())
+        return root
     }
 
     fun performBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
+
+    /** Tap fallback for WhatsApp nodes whose Accessibility ACTION_CLICK is not exposed. */
+    fun tapBounds(bounds: Rect?, durationMs: Long = 72L): Boolean {
+        val b = bounds ?: return false
+        if (b.width() <= 0 || b.height() <= 0) return false
+        val x = b.exactCenterX()
+        val y = b.exactCenterY()
+        val path = Path().apply { moveTo(x, y) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(48L, 180L)))
+            .build()
+        return dispatchGesture(gesture, null, null)
+    }
 
     /** Gesture fallback for WhatsApp builds whose message RecyclerView does not expose ACTION_SCROLL_BACKWARD. */
     fun swipeTowardOlderMessages(durationMs: Long): Boolean {

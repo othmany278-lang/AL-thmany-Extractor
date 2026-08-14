@@ -10,8 +10,11 @@ class ExtractorRepository(private val db: ExtractorDatabase) {
         db.replaceGroups(text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList(), whatsappPackage)
     }
     suspend fun addDiscoveredGroups(names: Collection<String>): Int = withContext(Dispatchers.IO) { db.addDiscoveredGroups(names) }
-    suspend fun addDiscoveredGroupCandidates(candidates: Collection<GroupSyncCandidate>): Int = withContext(Dispatchers.IO) {
-        db.addDiscoveredGroupCandidates(candidates)
+    suspend fun addDiscoveredGroupCandidates(candidates: Collection<GroupSyncCandidate>, syncGeneration: Long): Int = withContext(Dispatchers.IO) {
+        db.addDiscoveredGroupCandidates(candidates, syncGeneration)
+    }
+    suspend fun finalizeGroupSync(whatsappPackage: String, syncGeneration: Long) = withContext(Dispatchers.IO) {
+        db.finalizeGroupSync(whatsappPackage, syncGeneration)
     }
     suspend fun groups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getGroups() }
     suspend fun groupByName(name: String, whatsappPackage: String? = null): TargetGroup? =

@@ -1,0 +1,27 @@
+AL-thmany Extractor 2.14.1 — Runtime Access Fix
+================================================
+
+سبب الإصلاح:
+- الإصدار 2.14.0 كان يشدد مطابقة صف القروب باشتراط ظهور وقت/Unread داخل نفس subtree.
+- GroupAccessRouter كان يمسح قائمة الدردشات باتجاه واحد فقط قبل Search fallback.
+- فتح معلومات القروب كان يعتمد على ACTION_CLICK فقط بدون Gesture fallback.
+- النشر كان يعتمد على editable heuristic فقط لمربع الرسالة، ما يفشل على بعض إصدارات WhatsApp.
+
+الإصلاحات:
+- مطابقة صف القروب بالعنوان الحقيقي + geometry بدل شرط الوقت/Unread.
+- تحسين استخراج اسم المحادثة أثناء Sync وعدم اعتبار preview/time جزءًا من الاسم.
+- مسح قائمة القروبات باتجاهين ثم Search كحل أخير.
+- Tap Gesture احتياطي لصف القروب وعنوان المحادثة.
+- Composer lookup عبر View IDs المعروفة ثم editable fallback.
+- Focus/Click قبل ACTION_SET_TEXT.
+- Send lookup عبر View ID ثم النص/contentDescription.
+- بقاء قاعدة GroupRecord الموحدة وEvent-first وRecovery/Checkpoint كما هي.
+
+فحوص المصدر:
+- scripts/validate_release.py: PASS
+- scripts/run_pure_checks.sh: PASS
+- ZIP integrity: يتم فحصه بعد التغليف.
+
+ملاحظة:
+- لم يتم تنفيذ Android Gradle compile محليًا لعدم وجود Android SDK/Gradle project wrapper في بيئة التسليم.
+- GitHub Actions يبقى الاختبار النهائي لبناء APK على Android SDK 36/JDK 17.
