@@ -10,6 +10,12 @@ enum class ScanSpeedProfile(val labelAr: String, val previewTimeoutMs: Long, val
     SAFE("دقيق", 8_000L, 190L, 50L)
 }
 
+enum class ScanActionMode(val labelAr: String) {
+    SCAN_ONLY("فحص فقط"),
+    JOIN_ONLY("انضمام فقط"),
+    SCAN_AND_JOIN("فحص + انضمام")
+}
+
 enum class ScanScope(val labelAr: String) {
     PENDING_ONLY("الجديد وغير المؤكد"),
     UNCERTAIN_ONLY("غير المؤكد والأخطاء فقط"),
@@ -29,6 +35,8 @@ data class ScanUiState(
     val speed: ScanSpeedProfile = ScanSpeedProfile.ADAPTIVE,
     val scope: ScanScope = ScanScope.PENDING_ONLY,
     val maxAttempts: Int = 3,
+    val actionMode: ScanActionMode = ScanActionMode.SCAN_ONLY,
+    val requestToJoinEnabled: Boolean = false,
     val message: String = "جاهز للفحص",
     val stats: ScanStats = ScanStats()
 )

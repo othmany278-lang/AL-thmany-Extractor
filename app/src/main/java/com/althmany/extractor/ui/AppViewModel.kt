@@ -20,6 +20,7 @@ import com.althmany.extractor.engine.PublishUiState
 import com.althmany.extractor.engine.PublishSpeedProfile
 import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.engine.ScanScope
+import com.althmany.extractor.engine.ScanActionMode
 import com.althmany.extractor.engine.ScanSpeedProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,7 +95,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addGroups(text: String) {
         viewModelScope.launch {
-            repo.addGroupsFromText(text)
+            repo.addGroupsFromText(text, engineState.value.selectedWhatsAppPackage.orEmpty())
             _groups.value = repo.groups()
             _message.value = "تم حفظ قائمة المجموعات"
         }
@@ -134,7 +135,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyGroupSelectionPreset(preset: GroupSelectionPreset) {
         viewModelScope.launch {
-            repo.setSelectionPreset(preset)
+            repo.setSelectionPreset(preset, engineState.value.selectedWhatsAppPackage)
             _groups.value = repo.groups()
             ExtractionController.refreshStats()
             _message.value = preset.labelAr
@@ -168,6 +169,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setScanSpeed(value: ScanSpeedProfile) = ScanController.setSpeed(value)
     fun setScanScope(value: ScanScope) = ScanController.setScope(value)
+    fun setScanActionMode(value: ScanActionMode) = ScanController.setActionMode(value)
+    fun setScanRequestToJoinEnabled(value: Boolean) = ScanController.setRequestToJoinEnabled(value)
     fun setScanMaxAttempts(value: Int) = ScanController.setMaxAttempts(value)
 
     fun clearScan() {

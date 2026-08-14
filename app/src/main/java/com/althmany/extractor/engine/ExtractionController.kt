@@ -11,6 +11,8 @@ import com.althmany.extractor.data.ExtractionMode
 import com.althmany.extractor.data.ExtractionPreferences
 import com.althmany.extractor.data.ExtractorRepository
 import com.althmany.extractor.data.GroupCheckpoint
+import com.althmany.extractor.data.GroupAccessMethod
+import com.althmany.extractor.data.LinkCandidate
 import com.althmany.extractor.data.GroupSyncCandidate
 import com.althmany.extractor.data.GroupStatus
 import com.althmany.extractor.data.SpeedProfile
@@ -51,6 +53,7 @@ object ExtractionController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val uiEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val adapter = WhatsAppUiAdapter()
+    private val accessRouter = GroupAccessRouter(adapter)
     private var service: WhatsAppAccessibilityService? = null
     private var runJob: Job? = null
     private var allowIncompleteCheckpointResume: Boolean = false
@@ -316,7 +319,15 @@ object ExtractionController {
         }
         scanConversationList(svc, timing, found)
         restoreConversationListPosition(svc, timing, initialVisibleNames)
-        val added = repository.addDiscoveredGroupCandidates(found.values)
+        val syncPackage = requireSelectedPackage()
+        val unifiedCandidates = found.values.mapIndexed { index, candidate ->
+            candidate.copy(
+                whatsappPackage = syncPackage,
+                syncOrder = index,
+                lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST
+            )
+        }
+        val added = repository.addDiscoveredGroupCandidates(unifiedCandidates)
         repository.log(null, "INFO", "sync-complete", "اكتشفت ${found.size} محادثة مرشحة، جديد منها $added")
         _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت المزامنة: ${found.size}", syncFound = found.size)
         refreshStats()
@@ -390,9 +401,10 @@ object ExtractionController {
         try {
             allowIncompleteCheckpointResume = !resetRun
             val prefs = settingsStore.get()
+            val targetPackage = prefs.targetWhatsAppPackage ?: requireSelectedPackage()
             _state.value = _state.value.copy(mode = prefs.mode, speed = prefs.speed, maxScrollIterations = prefs.maxScrollIterations)
-            if (resetRun) repository.resetRunStatuses()
-            var groups = repository.pendingSelectedGroups()
+            if (resetRun) repository.resetRunStatuses(targetPackage)
+            var groups = repository.pendingSelectedGroups(targetPackage)
             if (groups.isEmpty()) {
                 finishRun("لا توجد مجموعات محددة تحتاج إلى استخراج")
                 return
@@ -415,7 +427,7 @@ object ExtractionController {
             }
             awaitUiChange(ExtractionPolicy.timing(prefs.speed).groupOpenMs)
 
-            groups = repository.pendingSelectedGroups()
+            groups = repository.pendingSelectedGroups(targetPackage)
             groups.forEachIndexed { index, group ->
                 awaitIfPaused()
                 if (!stateStore.active) return
@@ -477,10 +489,11 @@ object ExtractionController {
     }
 
     private suspend fun processGroup(group: TargetGroup, prefs: ExtractionPreferences) {
-        repository.updateStatus(group.id, GroupStatus.SEARCHING)
-        _state.value = _state.value.copy(status = EngineStatus.SEARCHING_GROUP, message = "البحث عن: ${group.name}")
+        repository.updateStatus(group.id, GroupStatus.OPENING)
+        _state.value = _state.value.copy(status = EngineStatus.OPENING_GROUP, message = "فتح ${group.name} من ذاكرة القروبات")
         notifier.show(_state.value)
-        if (!searchAndOpenGroup(group.name, prefs)) error("تعذر العثور على المجموعة أو فتحها")
+        val access = openGroupFromMemory(group, prefs)
+        if (!access.opened) error("تعذر فتح المجموعة عبر المسارات المحفوظة والـfallback")
 
         if (group.discovered && !group.verifiedGroup) {
             repository.updateStatus(group.id, GroupStatus.VERIFYING)
@@ -531,6 +544,40 @@ object ExtractionController {
             }
             ExtractionMode.NEW_ONLY -> extractDeep(group, prefs)
         }
+    }
+
+    private suspend fun openGroupFromMemory(group: TargetGroup, prefs: ExtractionPreferences): GroupAccessRouter.Result {
+        val svc = service ?: return GroupAccessRouter.Result(false, detail = "Accessibility غير متصلة")
+        val expected = requireSelectedPackage()
+        if (group.whatsappPackage.isNotBlank() && group.whatsappPackage != expected) {
+            repository.log(group.name, "WARN", "group-package-mismatch", "القروب محفوظ لـ ${group.whatsappPackage} بينما المحدد $expected")
+        }
+        val result = accessRouter.open(
+            group = group,
+            service = svc,
+            expectedPackage = expected,
+            timing = ExtractionPolicy.timing(prefs.speed),
+            waitForUi = { ms -> awaitUiChange(ms) },
+            ensureForeground = {
+                try {
+                    ensureWhatsAppForeground(prefs)
+                    true
+                } catch (_: Throwable) {
+                    false
+                }
+            },
+            maxScrollPasses = 320,
+            allowSearchFallback = true
+        )
+        if (result.opened) {
+            repository.recordGroupAccessSuccess(group.id, result.method)
+            if (group.whatsappPackage.isBlank()) repository.updateGroupIdentity(group.id, group.jidOrGroupId, expected)
+            repository.log(group.name, "INFO", "group-open-route", result.detail)
+        } else {
+            result.attempted.lastOrNull()?.let { repository.recordGroupAccessFailure(group.id, it) }
+            repository.log(group.name, "WARN", "group-open-failed", result.detail)
+        }
+        return result
     }
 
     private suspend fun searchAndOpenGroup(groupName: String, prefs: ExtractionPreferences): Boolean {
@@ -756,13 +803,18 @@ object ExtractionController {
 
     private suspend fun captureVisibleLinks(group: TargetGroup, seen: MutableSet<String>): Int {
         val root = service?.currentRoot() ?: return 0
-        val batch = ArrayList<Pair<String, String>>()
+        val batch = ArrayList<LinkCandidate>()
         for (url in adapter.collectVisibleUrls(root)) {
             val normalized = LinkExtractor.normalize(url)
             if (normalized.isBlank() || !seen.add(normalized)) continue
-            batch += url to normalized
+            batch += LinkCandidate(
+                url = url,
+                normalizedUrl = normalized,
+                category = LinkExtractor.category(normalized),
+                inviteCode = LinkExtractor.inviteCode(normalized)
+            )
         }
-        return repository.saveLinksBatch(batch, group.name)
+        return repository.saveLinksBatch(batch, group)
     }
 
     private data class BurstResult(val snapshot: NodeSnapshot, val newLinks: Int)
@@ -815,7 +867,8 @@ object ExtractionController {
             if (adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) return
             svc.performBack(); awaitUiChange(timing.searchOpenMs)
         }
-        if (!searchAndOpenGroup(groupName, prefs)) error("تعذر الرجوع للمحادثة بعد المسار الذكي")
+        val record = repository.groupByName(groupName, selectedPackageOrNull()) ?: error("لم يعد سجل القروب موجودًا")
+        if (!openGroupFromMemory(record, prefs).opened) error("تعذر الرجوع للمحادثة بعد المسار الذكي")
     }
 
     private suspend fun returnFromNestedToChat(groupName: String, prefs: ExtractionPreferences) {
@@ -825,7 +878,7 @@ object ExtractionController {
         // the group title is still visible on the nested info page.
         repeat(2) { svc.performBack(); awaitUiChange(timing.searchOpenMs) }
         if (!adapter.isGroupVisible(svc.currentRoot(), groupName, selectedPackageOrNull())) {
-            searchAndOpenGroup(groupName, prefs)
+            repository.groupByName(groupName, selectedPackageOrNull())?.let { openGroupFromMemory(it, prefs) }
         }
     }
 

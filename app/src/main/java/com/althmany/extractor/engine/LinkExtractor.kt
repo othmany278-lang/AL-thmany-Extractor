@@ -44,14 +44,30 @@ object LinkExtractor {
         val host = runCatching { URI(normalized).host.orEmpty().lowercase(Locale.ROOT).removePrefix("www.") }.getOrDefault("")
         return when {
             lower.substringBefore('?').endsWith(".pdf") -> LinkCategory.PDF
-            host == "chat.whatsapp.com" || host.endsWith(".whatsapp.com") || host == "wa.me" -> LinkCategory.WHATSAPP
+            host == "chat.whatsapp.com" -> LinkCategory.WHATSAPP_GROUP_OR_COMMUNITY
+            host == "whatsapp.com" && uriPath(normalized).startsWith("/channel/", ignoreCase = true) -> LinkCategory.WHATSAPP_CHANNEL
+            host.endsWith(".whatsapp.com") && uriPath(normalized).startsWith("/channel/", ignoreCase = true) -> LinkCategory.WHATSAPP_CHANNEL
+            host == "wa.me" -> LinkCategory.WA_ME
             host == "t.me" || host == "telegram.me" || host.endsWith(".telegram.org") -> LinkCategory.TELEGRAM
             host == "instagram.com" || host.endsWith(".instagram.com") -> LinkCategory.INSTAGRAM
             host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.watch" -> LinkCategory.FACEBOOK
             host == "google.com" || host.endsWith(".google.com") || host == "goo.gl" || host == "forms.gle" -> LinkCategory.GOOGLE
+            host.isNotBlank() -> LinkCategory.WEB_URL
             else -> LinkCategory.OTHER
         }
     }
+
+    fun inviteCode(raw: String): String? {
+        val normalized = normalize(raw)
+        return runCatching {
+            val uri = URI(normalized)
+            if (uri.host.orEmpty().equals("chat.whatsapp.com", true)) {
+                uri.path.orEmpty().trim('/').substringBefore('/').takeIf { it.isNotBlank() }
+            } else null
+        }.getOrNull()
+    }
+
+    private fun uriPath(normalized: String): String = runCatching { URI(normalized).path.orEmpty() }.getOrDefault("")
 
     private fun sanitize(value: String): String {
         return value.trim()

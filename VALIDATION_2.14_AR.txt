@@ -1,0 +1,97 @@
+AL-thmany Extractor 2.14.0 — Unified Group Memory
+==================================================
+
+نطاق التعديل
+------------
+- تطبيق Android Native يعمل مع تطبيق WhatsApp الحقيقي عبر Accessibility/Android UI.
+- قاعدة قروبات موحدة مشتركة بين الاستخراج والنشر.
+- لا يتم حفظ AccessibilityNodeInfo؛ كل تفاعل يطلب Root حديثًا.
+- GroupRecord يحفظ package وID/JID إن توفر وطرق الوصول وآخر نجاح/فشل وحالة النشر الأخيرة.
+- فتح القروب: Cached non-search → Visible List → Scroll + Match → Search fallback أخير.
+- الاستخراج Event-first مع Link classification + dedupe + source group/package metadata.
+- الفحص يدعم: فحص فقط / انضمام فقط / فحص + انضمام.
+- طلب الانضمام للمجموعات التي تحتاج موافقة خيار مستقل وغير مفعل افتراضيًا.
+- بعد إجراء Join/Request، النتيجة غير المحسومة تصبح ACTION_UNCERTAIN ولا يعاد الضغط أعمى.
+- النشر يعيد استخدام نفس GroupRecord/GroupAccessRouter ويسجل آخر حالة نشر في ذاكرة القروب.
+- اختيار/استخراج القروبات مقيد بنسخة WhatsApp المحددة لتجنب خلط WhatsApp وBusiness.
+
+قيود تقنية مقصودة
+------------------
+- لا يوجد مسار رسمي ثابت في WhatsApp Android لفتح قروب بواسطة JID مباشرة؛ يتم حفظ JID إذا ظهر من مصدر موثوق ولا يتم ادعاء Direct JID غير مدعوم.
+- Shizuku backend الحقيقي غير مضاف في 2.14.0؛ المحرك الحالي Accessibility + Android native intents/actions.
+- لم يتم تنفيذ Full Android Gradle compile محليًا لأن بيئة التسليم لا تحتوي Android SDK/Gradle كاملين. GitHub Actions المرفق هو اختبار build النهائي للـAPK.
+
+فحص عقد المصدر
+---------------
+PASS: AGP 8.13.2
+PASS: Kotlin 2.3.21
+PASS: compileSdk 36
+PASS: targetSdk 36
+PASS: versionCode 2140
+PASS: versionName 2.14.0
+PASS: Compose API36 BOM
+PASS: modern compilerOptions
+PASS: Known Compose weight import fixed
+PASS: Unified GroupRecord access metadata
+PASS: No AccessibilityNodeInfo persistence model
+PASS: SQLite group memory DB v10
+PASS: Unified package-scoped group database
+PASS: Legacy group row coalescing
+PASS: Package-scoped extraction queue
+PASS: Package-scoped selection presets
+PASS: Shared GroupAccessRouter
+PASS: Visible-list open without Search
+PASS: Scroll + match before Search
+PASS: Search is late fallback
+PASS: No fake Android JID direct route
+PASS: Access success memory
+PASS: Access failure recovery memory
+PASS: Event-first extraction
+PASS: Interleaved extraction capture
+PASS: Strict end proof
+PASS: Extraction checkpoint
+PASS: Android URL multi-surface capture
+PASS: Rich link classifier
+PASS: Invite code extraction
+PASS: Link source group/package persistence
+PASS: Link source metadata export
+PASS: Scanner action modes
+PASS: Scanner mode UI
+PASS: Open-once scan action path
+PASS: Request-to-join explicit setting
+PASS: Join verified state
+PASS: Uncertain action duplicate guard
+PASS: Scan connectivity guard
+PASS: Scan stable result gate
+PASS: Scan adaptive ceiling 5.6s
+PASS: GroupRecord publish memory
+PASS: Publisher reuses GroupRecord
+PASS: Publisher package guard
+PASS: Publish run token
+PASS: Publish uncertain duplicate guard
+PASS: Truthful Turbo 1.0s
+PASS: Extractor/Scan/Publish event backpressure
+PASS: Active-engine event routing
+PASS: Runtime bridge live instance
+PASS: 95ms fallback poll
+PASS: SQLite WAL tuning
+PASS: No backup
+PASS: No cleartext traffic
+PASS: Workflow artifact v2.14
+
+AL-thmany Extractor 2.14.0 Unified Group Memory source contract: PASS
+
+Pure Kotlin regression checks
+-----------------------------
+AL-thmany v2.14 pure engine/profile checks: PASS
+PureScanChecks v2.14: PASS
+PurePublishChecks v2.14: OK
+PureRuntimeChecks: OK
+
+ALL PURE CHECKS: PASS
+
+نتيجة التسليم
+-------------
+SOURCE CONTRACT: PASS
+PURE REGRESSIONS: PASS
+FULL ANDROID COMPILE: PENDING GITHUB ACTIONS

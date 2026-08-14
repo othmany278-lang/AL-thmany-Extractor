@@ -1,10 +1,13 @@
-# AL-thmany Extractor 2.13.0 — Native Parity
+# AL-thmany Extractor 2.14.0 — Unified Group Memory
 
 هذه النسخة تنقل فلسفة **WA-Workspace: الاستخراج | الفحص | النشر** إلى تطبيق Android يعمل مع تطبيق WhatsApp الحقيقي (`com.whatsapp`) أو WhatsApp Business (`com.whatsapp.w4b`) **بدون WhatsApp Web وبدون WebView**.
 
 > ملاحظة تقنية: Android لا يتيح للتطبيق الوصول إلى WhatsApp Web Store أو `chat.sendMessage()` أو قاعدة بيانات واتساب الخاصة. لذلك 2.13 يحافظ على نفس التسلسل والضمانات قدر الإمكان عبر واجهة Android الحقيقية: Accessibility/Event-first للاستخراج والفحص والنشر النصي، وAndroid `ACTION_SEND` للمرفقات. لا توجد طبقة Shizuku حقيقية في هذا الإصدار بعد.
 
-## ما الجديد في 2.13.0
+## ما الجديد في 2.14.0
+
+> **2.14.0:** المزامنة تبني Group Database موحدة مشتركة بين الاستخراج والنشر، وفتح القروب أصبح يعتمد على الذاكرة/القائمة والتمرير قبل Search. أضيفت أيضًا أوضاع فحص فقط / انضمام فقط / فحص + انضمام مع حفظ النتيجة قبل الانتقال. لا يتم حفظ AccessibilityNodeInfo.
+
 
 - **مزامنة أغنى للقائمة:** اسم المحادثة + غير المقروء + آخر نشاط ظاهر + مؤشرات النشاط/القابلية للنشر/Community Parent، مع بقاء المرشحين غير مؤكدين حتى فتحهم والتحقق منهم كقروب.
 - **تحديد سريع للقروبات:** الكل، إلغاء الكل، غير المقروءة، النشطة، القابلة للنشر، وغير المؤكدة؛ مع بحث واختيار يدوي.
@@ -200,7 +203,7 @@ Android يعزل بيانات التطبيقات. لذلك AL-thmany لا يقر
 - JDK 17.
 - Compose BOM 2026.04.01 (Compose 1.11 family، قبل متطلب compileSdk 37 في Compose 1.12).
 
-المستودع يحتوي Workflow جاهز في `.github/workflows/build-apk.yml`. عند الرفع إلى `main` ينفذ اختبارات الوحدة وLint ثم `assembleDebug` ويرفع APK كـ Artifact باسم `AL-thmany-Extractor-NativeParity-2.13.0-APK`.
+المستودع يحتوي Workflow جاهز في `.github/workflows/build-apk.yml`. عند الرفع إلى `main` ينفذ اختبارات الوحدة وLint ثم `assembleDebug` ويرفع APK كـ Artifact باسم `AL-thmany-Extractor-UnifiedGroupMemory-2.14.0-APK`.
 
 ## التحقق المنفذ في بيئة التطوير
 

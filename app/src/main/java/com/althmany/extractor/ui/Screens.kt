@@ -90,9 +90,9 @@ import com.althmany.extractor.data.ScanStatus
 import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.data.TargetGroup
 import com.althmany.extractor.engine.ExtractionUiState
-import com.althmany.extractor.engine.LinkExtractor
 import com.althmany.extractor.engine.PublishSpeedProfile
 import com.althmany.extractor.engine.PublishUiState
+import com.althmany.extractor.engine.ScanActionMode
 import com.althmany.extractor.engine.ScanScope
 import com.althmany.extractor.engine.ScanSpeedProfile
 import com.althmany.extractor.engine.ScanUiState
@@ -744,6 +744,29 @@ fun GroupsScreen(
                         Text(chips.joinToString(" • "), color = if (group.verifiedGroup) NeonGreen else SoftText, style = MaterialTheme.typography.bodySmall)
                         group.activityText?.let { Text("آخر نشاط ظاهر: $it", color = SoftText, style = MaterialTheme.typography.labelSmall) }
                         Text("الحالة: ${group.status.name} • روابط: ${group.extractedCount}", color = SoftText, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            "المسار المفضل: ${group.preferredAccessMethod.labelAr} • آخر نجاح: ${group.lastSuccessfulOpenMethod.labelAr}",
+                            color = SoftText,
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.End
+                        )
+                        Text(
+                            "WhatsApp: ${group.whatsappPackage.ifBlank { "غير مربوط بعد" }} • نجاح الوصول: ${group.accessSuccessCount} • فشل: ${group.accessFailureCount}",
+                            color = SoftText,
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.End
+                        )
+                        group.jidOrGroupId?.takeIf { it.isNotBlank() }?.let {
+                            Text("ID/JID: $it", color = NeonCyan, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.End)
+                        }
+                        group.lastPublishStatus?.let { publishStatus ->
+                            Text(
+                                "آخر نشر: $publishStatus${group.lastPublishError?.let { error -> " • $error" }.orEmpty()}",
+                                color = if (publishStatus == "FAILED") Danger else SoftText,
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.End
+                            )
+                        }
                         group.lastError?.let { Text(it, color = Danger, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End) }
                     }
                 }
@@ -799,7 +822,7 @@ fun ResultsScreen(
     val filtered = remember(links, query, category) {
         links.filter { link ->
             val textMatch = query.isBlank() || link.url.contains(query, ignoreCase = true) || link.groupName.contains(query, ignoreCase = true)
-            val categoryMatch = category == null || LinkExtractor.category(link.normalizedUrl) == category
+            val categoryMatch = category == null || link.category == category
             textMatch && categoryMatch
         }
     }
@@ -866,7 +889,7 @@ fun ResultsScreen(
                         Text(link.url, color = MaterialTheme.colorScheme.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(4.dp))
                         Text(link.groupName, fontWeight = FontWeight.SemiBold)
-                        Text("النوع: ${LinkExtractor.category(link.normalizedUrl).labelAr}", color = SoftText, style = MaterialTheme.typography.bodySmall)
+                        Text("النوع: ${link.category.labelAr}", color = SoftText, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -944,6 +967,8 @@ fun ScanScreen(
     onClear: () -> Unit,
     onScanSpeed: (ScanSpeedProfile) -> Unit,
     onScanScope: (ScanScope) -> Unit,
+    onScanActionMode: (ScanActionMode) -> Unit,
+    onRequestToJoinEnabled: (Boolean) -> Unit,
     onMaxAttempts: (Int) -> Unit,
     onExport: (ExportFormat) -> Unit
 ) {
@@ -974,7 +999,7 @@ fun ScanScreen(
             NeonCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     NeonSectionTitle("فحص روابط دعوات واتساب") { Icon(Icons.Default.Link, null, tint = NeonGreen) }
-                    Text("الصق روابط الدعوة أو استورد روابط الاستخراج. الفحص يقرأ الحالة فقط ولا يضغط انضمام.", color = SoftText, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                    Text("الصق روابط الدعوة أو استورد روابط الاستخراج. اختر: فحص فقط، انضمام فقط، أو فحص + انضمام. كل رابط يفتح مرة واحدة، ثم يُحفظ القرار قبل الانتقال.", color = SoftText, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
@@ -1036,6 +1061,47 @@ fun ScanScreen(
         }
 
         item {
+            NeonCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("وضع معالجة الرابط", fontWeight = FontWeight.Bold, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "OPEN ONCE → SCAN → CLASSIFY → تنفيذ الإجراء حسب الوضع → VERIFY → SAVE → NEXT",
+                        color = SoftText,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    ScanActionMode.entries.forEach { mode ->
+                        ChoicePill(
+                            mode.labelAr,
+                            scan.actionMode == mode,
+                            !scan.running,
+                            Modifier.fillMaxWidth()
+                        ) { onScanActionMode(mode) }
+                    }
+                    ChoicePill(
+                        if (scan.requestToJoinEnabled) "طلبات الموافقة: مفعلة" else "طلبات الموافقة: معطلة",
+                        scan.requestToJoinEnabled,
+                        !scan.running && scan.actionMode != ScanActionMode.SCAN_ONLY,
+                        Modifier.fillMaxWidth()
+                    ) { onRequestToJoinEnabled(!scan.requestToJoinEnabled) }
+                    Text(
+                        if (scan.actionMode == ScanActionMode.SCAN_ONLY)
+                            "في وضع فحص فقط لن يتم الضغط على انضمام أو طلب انضمام."
+                        else if (scan.requestToJoinEnabled)
+                            "إذا ظهرت موافقة المشرف، يمكن إرسال طلب الانضمام مرة واحدة ثم التحقق من النتيجة."
+                        else
+                            "روابط الموافقة تُسجّل فقط؛ لا يُرسل طلب انضمام إلا عند تفعيل الخيار.",
+                        color = SoftText,
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 NeonCard(Modifier.weight(1f)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1085,10 +1151,18 @@ fun ScanScreen(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                MetricCard("تم الانضمام", scan.stats.joined.toString(), Modifier.weight(1f), NeonGreen)
+                MetricCard("طلب مرسل", scan.stats.requestPending.toString(), Modifier.weight(1f), Color(0xFF48E0C5))
+                MetricCard("عضو مسبقًا", scan.stats.alreadyMember.toString(), Modifier.weight(1f), NeonCyan)
+                MetricCard("نتيجة الإجراء؟", scan.stats.actionUncertain.toString(), Modifier.weight(1f), Warning)
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
                 MetricCard("بانتظار", scan.stats.pending.toString(), Modifier.weight(1f), Color(0xFFA970FF))
                 MetricCard("غير مؤكد", scan.stats.unknown.toString(), Modifier.weight(1f), Warning)
-                MetricCard("عضو مسبقًا", scan.stats.alreadyMember.toString(), Modifier.weight(1f), NeonCyan)
-                MetricCard("طلب مرسل", scan.stats.requestPending.toString(), Modifier.weight(1f), Color(0xFF48E0C5))
+                MetricCard("اتصال", scan.stats.network.toString(), Modifier.weight(1f), Warning)
+                MetricCard("أخرى", scan.stats.other.toString(), Modifier.weight(1f), SoftText)
             }
         }
 
@@ -1105,7 +1179,7 @@ fun ScanScreen(
             Spacer(Modifier.height(8.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 item { ChoicePill("الكل", filter == null, modifier = Modifier.width(95.dp)) { filter = null } }
-                items(listOf(ScanStatus.DIRECT, ScanStatus.APPROVAL, ScanStatus.REQUEST_PENDING, ScanStatus.ALREADY_MEMBER, ScanStatus.INVALID, ScanStatus.UNKNOWN, ScanStatus.ERROR)) { status ->
+                items(listOf(ScanStatus.DIRECT, ScanStatus.APPROVAL, ScanStatus.JOINED, ScanStatus.REQUEST_PENDING, ScanStatus.ACTION_UNCERTAIN, ScanStatus.ALREADY_MEMBER, ScanStatus.INVALID, ScanStatus.UNKNOWN, ScanStatus.ERROR)) { status ->
                     ChoicePill(status.labelAr, filter == status, modifier = Modifier.width(115.dp)) { filter = status }
                 }
             }
@@ -1125,13 +1199,22 @@ fun ScanScreen(
 
         item {
             when {
-                scan.paused -> NeonActionButton("استكمال الفحص", icon = { Icon(Icons.Default.PlayArrow, null, tint = Color.White) }, onClick = onResume)
+                scan.paused -> NeonActionButton(
+                    when (scan.actionMode) {
+                        ScanActionMode.SCAN_ONLY -> "استكمال الفحص"
+                        ScanActionMode.JOIN_ONLY -> "استكمال الانضمام"
+                        ScanActionMode.SCAN_AND_JOIN -> "استكمال فحص + انضمام"
+                    }, icon = { Icon(Icons.Default.PlayArrow, null, tint = Color.White) }, onClick = onResume)
                 scan.running -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = onStop, modifier = Modifier.weight(1f), border = BorderStroke(1.dp, Danger), colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger)) { Icon(Icons.Default.Stop, null); Text("إنهاء") }
                     FilledTonalButton(onClick = onPause, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Pause, null); Text("إيقاف مؤقت") }
                 }
                 else -> NeonActionButton(
-                    "بدء الفحص",
+                    when (scan.actionMode) {
+                        ScanActionMode.SCAN_ONLY -> "بدء الفحص"
+                        ScanActionMode.JOIN_ONLY -> "بدء الانضمام"
+                        ScanActionMode.SCAN_AND_JOIN -> "بدء فحص + انضمام"
+                    },
                     enabled = items.isNotEmpty() && accessibilityEnabled && scan.serviceConnected && engine.selectedWhatsAppPackage != null,
                     icon = { Icon(Icons.Default.PlayArrow, null, tint = Color.White) },
                     onClick = onStart

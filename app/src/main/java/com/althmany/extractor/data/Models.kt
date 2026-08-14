@@ -30,6 +30,18 @@ enum class SpeedProfile(val labelAr: String) {
     SAFE("دقيق وآمن")
 }
 
+enum class GroupAccessMethod(val labelAr: String) {
+    CURRENT_CHAT("المحادثة الحالية"),
+    JID_DIRECT("ID/JID مباشر"),
+    DIRECT_INTENT("Direct Intent"),
+    SHARE_PICKER("Share Picker"),
+    RECENT_CHAT("المحادثات الأخيرة"),
+    VISIBLE_LIST("مطابقة مباشرة من القائمة"),
+    SCROLL_MATCH("تمرير + مطابقة"),
+    SEARCH_FALLBACK("Search كحل أخير"),
+    UNKNOWN("غير محدد")
+}
+
 enum class GroupSelectionPreset(val labelAr: String) {
     ALL("تحديد الكل"),
     NONE("إلغاء التحديد"),
@@ -60,7 +72,11 @@ data class GroupSyncCandidate(
     val activityText: String? = null,
     val active: Boolean = true,
     val publishableHint: Boolean = true,
-    val communityParentHint: Boolean = false
+    val communityParentHint: Boolean = false,
+    val whatsappPackage: String = "",
+    val jidOrGroupId: String? = null,
+    val syncOrder: Int = Int.MAX_VALUE,
+    val lastKnownAccessMethod: GroupAccessMethod = GroupAccessMethod.VISIBLE_LIST
 )
 
 data class TargetGroup(
@@ -77,19 +93,41 @@ data class TargetGroup(
     val active: Boolean = true,
     val publishable: Boolean = true,
     val communityParent: Boolean = false,
-    val lastSyncedAt: Long? = null
+    val lastSyncedAt: Long? = null,
+    val jidOrGroupId: String? = null,
+    val whatsappPackage: String = "",
+    val lastKnownAccessMethod: GroupAccessMethod = GroupAccessMethod.UNKNOWN,
+    val preferredAccessMethod: GroupAccessMethod = GroupAccessMethod.UNKNOWN,
+    val lastSuccessfulOpenMethod: GroupAccessMethod = GroupAccessMethod.UNKNOWN,
+    val accessSuccessCount: Int = 0,
+    val accessFailureCount: Int = 0,
+    val lastOpenedAt: Long? = null,
+    val syncOrder: Int = Int.MAX_VALUE,
+    val lastPublishStatus: String? = null,
+    val lastPublishedAt: Long? = null,
+    val lastPublishError: String? = null
 )
 
 
 enum class LinkCategory(val labelAr: String) {
-    WHATSAPP("WhatsApp"),
+    WHATSAPP_GROUP_OR_COMMUNITY("WhatsApp Group/Community"),
+    WHATSAPP_CHANNEL("WhatsApp Channel"),
+    WA_ME("wa.me"),
     TELEGRAM("Telegram"),
     INSTAGRAM("Instagram"),
     FACEBOOK("Facebook"),
     GOOGLE("Google"),
     PDF("PDF"),
+    WEB_URL("Web URL"),
     OTHER("أخرى")
 }
+
+data class LinkCandidate(
+    val url: String,
+    val normalizedUrl: String,
+    val category: LinkCategory,
+    val inviteCode: String? = null
+)
 
 data class LinkRecord(
     val id: Long,
@@ -98,8 +136,14 @@ data class LinkRecord(
     val groupName: String,
     val occurrences: Int,
     val firstSeen: Long,
-    val lastSeen: Long
-)
+    val lastSeen: Long,
+    val category: LinkCategory = LinkCategory.OTHER,
+    val inviteCode: String? = null,
+    val sourceGroupId: Long? = null,
+    val whatsappPackage: String? = null
+) {
+    val duplicate: Boolean get() = occurrences > 1
+}
 
 data class GroupCheckpoint(
     val groupName: String,

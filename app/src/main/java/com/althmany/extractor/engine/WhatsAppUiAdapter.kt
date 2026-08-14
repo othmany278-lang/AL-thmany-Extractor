@@ -316,6 +316,60 @@ class WhatsAppUiAdapter {
     fun collectChatListCandidates(root: AccessibilityNodeInfo?): Set<String> =
         collectChatListCandidatesDetailed(root).mapTo(linkedSetOf()) { it.name }
 
+    /**
+     * Opens an exact conversation row already visible in the main chat list without touching Search.
+     * The click target is the row containing the exact title, not an arbitrary text match elsewhere.
+     */
+    fun openVisibleChatListRow(root: AccessibilityNodeInfo?, exactName: String): Boolean {
+        if (root == null || exactName.isBlank()) return false
+        val wanted = exactName.trim()
+        var bestRow: AccessibilityNodeInfo? = null
+        var bestTop = Int.MAX_VALUE
+        walk(root) { node ->
+            if (!node.isVisibleToUser) return@walk
+            val text = node.text?.toString()?.trim() ?: return@walk
+            if (!text.equals(wanted, ignoreCase = true)) return@walk
+            var row: AccessibilityNodeInfo? = node
+            repeat(5) {
+                val r = row ?: return@repeat
+                val labels = descendantLabels(r, 24)
+                val looksLikeRow = labels.any { it.equals(wanted, true) } &&
+                    labels.any { it != wanted && (looksLikeActivityLabel(it) || it.contains("unread", true) || it.contains("غير مقرو", true)) }
+                if (r.isClickable && r.isVisibleToUser && looksLikeRow) {
+                    val rect = Rect().also(r::getBoundsInScreen)
+                    if (rect.top < bestTop && rect.height() in 40..420) {
+                        bestTop = rect.top
+                        bestRow = r
+                    }
+                    return@repeat
+                }
+                row = r.parent
+            }
+        }
+        return bestRow?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    }
+
+    fun inviteActionAvailable(root: AccessibilityNodeInfo?, approval: Boolean): Boolean {
+        val labels = if (approval) {
+            listOf("طلب الانضمام", "إرسال طلب الانضمام", "طلب للانضمام", "Request to join", "Send request", "Request to join group")
+        } else {
+            listOf("الانضمام إلى المجموعة", "انضمام إلى المجموعة", "انضم إلى المجموعة", "Join group", "Join this group")
+        }
+        val node = findVisibleNodeByPatterns(root, labels) ?: return false
+        return hasClickableSelfOrAncestor(node)
+    }
+
+    fun clickInviteAction(root: AccessibilityNodeInfo?, approval: Boolean): Boolean {
+        val labels = if (approval) {
+            listOf("طلب الانضمام", "إرسال طلب الانضمام", "طلب للانضمام", "Request to join", "Send request", "Request to join group")
+        } else {
+            listOf("الانضمام إلى المجموعة", "انضمام إلى المجموعة", "انضم إلى المجموعة", "Join group", "Join this group")
+        }
+        val node = findVisibleNodeByPatterns(root, labels) ?: return false
+        if (!hasClickableSelfOrAncestor(node)) return false
+        return clickNodeOrParent(node)
+    }
+
     fun scrollChatListForward(root: AccessibilityNodeInfo?): Boolean = scrollGenericForward(root)
     fun scrollChatListBackward(root: AccessibilityNodeInfo?): Boolean = scrollToOlderMessages(root)
 

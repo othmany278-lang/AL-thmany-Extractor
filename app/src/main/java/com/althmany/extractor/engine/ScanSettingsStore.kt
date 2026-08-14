@@ -21,6 +21,20 @@ class ScanSettingsStore(context: Context) {
         prefs.edit().putString("scope", value.name).apply()
     }
 
+    fun loadActionMode(): ScanActionMode = runCatching {
+        ScanActionMode.valueOf(prefs.getString("action_mode", ScanActionMode.SCAN_ONLY.name)!!)
+    }.getOrDefault(ScanActionMode.SCAN_ONLY)
+
+    fun saveActionMode(value: ScanActionMode) {
+        prefs.edit().putString("action_mode", value.name).apply()
+    }
+
+    fun loadRequestToJoinEnabled(): Boolean = prefs.getBoolean("request_to_join", false)
+
+    fun saveRequestToJoinEnabled(value: Boolean) {
+        prefs.edit().putBoolean("request_to_join", value).apply()
+    }
+
     fun loadMaxAttempts(): Int = prefs.getInt("max_attempts", 3).coerceIn(1, 5)
 
     fun saveMaxAttempts(value: Int) {

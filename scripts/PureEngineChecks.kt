@@ -18,7 +18,7 @@ fun main() {
     val links = LinkExtractor.extract("A https://Example.com/a/, B www.test.com/x?y=1. C https://example.com/a/")
     checkThat(links.size == 3, "URL capture failed: $links")
     checkThat(LinkExtractor.normalize("HTTPS://WWW.Example.com/a/") == "https://example.com/a", "normalization failed")
-    checkThat(LinkExtractor.category("https://chat.whatsapp.com/AbCd") == LinkCategory.WHATSAPP, "WhatsApp category failed")
+    checkThat(LinkExtractor.category("https://chat.whatsapp.com/AbCd") == LinkCategory.WHATSAPP_GROUP_OR_COMMUNITY, "WhatsApp category failed")
     checkThat(LinkExtractor.category("https://t.me/example") == LinkCategory.TELEGRAM, "Telegram category failed")
     checkThat(LinkExtractor.category("https://example.org/file.pdf?x=1") == LinkCategory.PDF, "PDF category failed")
 
@@ -66,5 +66,5 @@ fun main() {
     checkThat(ProfileLaunchPolicy.isMismatch("com.whatsapp.w4b", "com.whatsapp"), "package mismatch guard failed")
     checkThat(!ProfileLaunchPolicy.isMismatch("com.whatsapp", "com.whatsapp"), "same package must not be mismatch")
 
-    println("AL-thmany v2.13 pure engine/profile checks: PASS")
+    println("AL-thmany v2.14 pure engine/profile checks: PASS")
 }

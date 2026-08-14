@@ -184,6 +184,8 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onClear = viewModel::clearScan,
                     onScanSpeed = viewModel::setScanSpeed,
                     onScanScope = viewModel::setScanScope,
+                    onScanActionMode = viewModel::setScanActionMode,
+                    onRequestToJoinEnabled = viewModel::setScanRequestToJoinEnabled,
                     onMaxAttempts = viewModel::setScanMaxAttempts,
                     onExport = { format ->
                         pendingFormat = format
@@ -228,7 +230,10 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
 
                 AppScreen.GROUPS -> GroupsScreen(
                     padding = padding,
-                    groups = groups,
+                    groups = groups.filter { group ->
+                        val selectedPackage = engine.selectedWhatsAppPackage
+                        selectedPackage == null || group.whatsappPackage.isBlank() || group.whatsappPackage == selectedPackage
+                    },
                     onAddGroups = viewModel::addGroups,
                     onSelected = viewModel::setSelected,
                     onPreset = viewModel::applyGroupSelectionPreset,

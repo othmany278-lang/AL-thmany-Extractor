@@ -30,10 +30,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Professional read-only WhatsApp invite scanner.
+ * WhatsApp invite scanner with three explicit modes: scan only, join only, and scan + join.
  *
  * Guarantees by design:
- *  - never clicks Join / Request-to-join;
+ *  - membership actions run only when the selected action mode permits them;
  *  - launches only the explicitly selected WhatsApp package;
  *  - retries only uncertain/transient outcomes;
  *  - stores confidence, signal, metadata and duration for auditability;
@@ -62,7 +62,9 @@ object ScanController {
         _state.value = _state.value.copy(
             speed = settingsStore.loadSpeed(),
             scope = settingsStore.loadScope(),
-            maxAttempts = settingsStore.loadMaxAttempts()
+            maxAttempts = settingsStore.loadMaxAttempts(),
+            actionMode = settingsStore.loadActionMode(),
+            requestToJoinEnabled = settingsStore.loadRequestToJoinEnabled()
         )
         refreshStats()
     }
@@ -119,6 +121,18 @@ object ScanController {
         val clean = value.coerceIn(1, 5)
         settingsStore.saveMaxAttempts(clean)
         _state.value = _state.value.copy(maxAttempts = clean)
+    }
+
+    fun setActionMode(value: ScanActionMode) {
+        if (isRunning()) return
+        settingsStore.saveActionMode(value)
+        _state.value = _state.value.copy(actionMode = value)
+    }
+
+    fun setRequestToJoinEnabled(value: Boolean) {
+        if (isRunning()) return
+        settingsStore.saveRequestToJoinEnabled(value)
+        _state.value = _state.value.copy(requestToJoinEnabled = value)
     }
 
     fun start() {
@@ -397,7 +411,9 @@ object ScanController {
                         definitiveRounds = 0
                     }
                     if (definitiveRounds >= definitiveStableThreshold) {
-                        return TimedDecision(definitiveCandidate ?: decision, SystemClock.uptimeMillis() - started)
+                        val stableDecision = definitiveCandidate ?: decision
+                        val acted = maybeApplyMembershipAction(stableDecision, speed, packageName)
+                        return TimedDecision(acted, SystemClock.uptimeMillis() - started)
                     }
                 } else {
                     definitiveCandidate = null
@@ -426,7 +442,113 @@ object ScanController {
             definitive = true,
             signalCode = if (last.signalCode == "WAITING") "TIMEOUT_NO_SIGNAL" else last.signalCode
         )
-        return TimedDecision(final, SystemClock.uptimeMillis() - started)
+        val actedFinal = maybeApplyMembershipAction(final, speed, packageName)
+        return TimedDecision(actedFinal, SystemClock.uptimeMillis() - started)
+    }
+
+    private suspend fun maybeApplyMembershipAction(
+        decision: InviteScanDecision,
+        speed: ScanSpeedProfile,
+        packageName: String
+    ): InviteScanDecision {
+        val mode = _state.value.actionMode
+        if (mode == ScanActionMode.SCAN_ONLY) return decision
+        if (decision.status == ScanStatus.ALREADY_MEMBER || decision.status == ScanStatus.JOINED || decision.status == ScanStatus.REQUEST_PENDING) {
+            return decision
+        }
+
+        val approval = decision.status == ScanStatus.APPROVAL
+        val direct = decision.status == ScanStatus.DIRECT
+        if (!approval && !direct) return decision
+
+        if (approval && !_state.value.requestToJoinEnabled) {
+            return decision.copy(
+                detail = "${decision.detail} — إرسال طلب الانضمام معطل من الإعدادات",
+                signalCode = "APPROVAL_ACTION_DISABLED"
+            )
+        }
+
+        val svc = service ?: return decision.copy(
+            status = ScanStatus.ERROR,
+            detail = "تعذر تنفيذ الإجراء: Accessibility غير متصلة",
+            signalCode = "ACTION_NO_SERVICE",
+            definitive = true
+        )
+        val root = svc.currentRoot()
+        if (!adapter.inviteActionAvailable(root, approval)) {
+            return decision.copy(
+                status = ScanStatus.ACTION_UNCERTAIN,
+                detail = "الحالة واضحة لكن زر الإجراء لم يعد متاحًا عند التنفيذ؛ لن يعاد الضغط تلقائيًا",
+                signalCode = "ACTION_BUTTON_GONE",
+                definitive = true
+            )
+        }
+
+        _state.value = _state.value.copy(
+            status = ScanEngineStatus.CLASSIFYING,
+            message = if (approval) "تنفيذ طلب الانضمام ثم التحقق" else "تنفيذ الانضمام ثم التحقق"
+        )
+        if (!adapter.clickInviteAction(root, approval)) {
+            return decision.copy(
+                status = ScanStatus.ACTION_UNCERTAIN,
+                detail = "تعذر تأكيد ضغط زر الإجراء؛ لن يعاد الضغط تلقائيًا",
+                signalCode = "ACTION_CLICK_UNCERTAIN",
+                definitive = true
+            )
+        }
+
+        val deadline = SystemClock.uptimeMillis() + when (speed) {
+            ScanSpeedProfile.HYPER -> 3_500L
+            ScanSpeedProfile.ADAPTIVE -> 5_000L
+            ScanSpeedProfile.SAFE -> 7_000L
+        }
+        var bestPost = decision
+        while (SystemClock.uptimeMillis() < deadline) {
+            waitIfPaused()
+            val current = svc.currentRoot()
+            if (current != null && adapter.isWhatsAppRoot(current, packageName)) {
+                val post = InviteScanClassifier.classify(adapter.snapshot(current).texts)
+                bestPost = chooseBetter(bestPost, post)
+                if (!approval) {
+                    val chatVisible = decision.groupName?.let { adapter.isGroupVisible(current, it, packageName) } == true
+                    if (post.status == ScanStatus.ALREADY_MEMBER || chatVisible) {
+                        return decision.copy(
+                            status = ScanStatus.JOINED,
+                            detail = "تم الانضمام والتحقق من انتقال واتساب إلى القروب",
+                            signalCode = "JOIN_VERIFIED",
+                            confidence = 100,
+                            definitive = true
+                        )
+                    }
+                } else if (post.status == ScanStatus.REQUEST_PENDING) {
+                    return post.copy(
+                        detail = "تم إرسال طلب الانضمام والتحقق من أنه قيد المراجعة",
+                        signalCode = "REQUEST_VERIFIED",
+                        confidence = 100,
+                        definitive = true,
+                        groupName = post.groupName ?: decision.groupName,
+                        memberCountText = post.memberCountText ?: decision.memberCountText,
+                        inviteKind = if (post.inviteKind == InviteKind.UNKNOWN) decision.inviteKind else post.inviteKind
+                    )
+                }
+                if (post.status in setOf(ScanStatus.INVALID, ScanStatus.FULL, ScanStatus.REMOVED, ScanStatus.ACCOUNT_LIMIT)) {
+                    return post
+                }
+            }
+            withTimeoutOrNull(speed.eventWaitMs) { uiEvents.first() }
+            delay(speed.settleDelayMs)
+        }
+
+        return decision.copy(
+            status = ScanStatus.ACTION_UNCERTAIN,
+            detail = if (approval)
+                "تم ضغط طلب الانضمام لكن لم تظهر إشارة تحقق نهائية؛ لن يعاد الضغط تلقائيًا"
+            else
+                "تم ضغط الانضمام لكن لم تظهر إشارة تحقق نهائية؛ لن يعاد الضغط تلقائيًا",
+            signalCode = if (approval) "REQUEST_ACTION_UNCERTAIN" else "JOIN_ACTION_UNCERTAIN",
+            confidence = maxOf(decision.confidence, bestPost.confidence),
+            definitive = true
+        )
     }
 
     private fun chooseBetter(a: InviteScanDecision, b: InviteScanDecision): InviteScanDecision {

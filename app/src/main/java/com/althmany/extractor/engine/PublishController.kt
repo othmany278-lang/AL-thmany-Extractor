@@ -11,6 +11,9 @@ import com.althmany.extractor.data.PublishContentMode
 import com.althmany.extractor.data.PublishItem
 import com.althmany.extractor.data.PublishRunStatus
 import com.althmany.extractor.data.PublishStatus
+import com.althmany.extractor.data.TargetGroup
+import com.althmany.extractor.data.GroupAccessMethod
+import com.althmany.extractor.data.SpeedProfile
 import com.althmany.extractor.notification.PublishNotifier
 import com.althmany.extractor.profile.ProfileLaunchPolicy
 import kotlinx.coroutines.CancellationException
@@ -48,6 +51,7 @@ object PublishController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val uiEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val adapter = WhatsAppUiAdapter()
+    private val accessRouter = GroupAccessRouter(adapter)
     private var service: WhatsAppAccessibilityService? = null
     private var job: Job? = null
     private var pauseRequested = false
@@ -197,7 +201,9 @@ object PublishController {
                 _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "فشل Preflight: واتساب/Accessibility غير جاهز في نفس البيئة")
                 return@launch
             }
-            val groups = repository.selectedGroups().filter { it.publishable && !it.communityParent }
+            val groups = repository.selectedGroups().filter {
+                it.publishable && !it.communityParent && (it.whatsappPackage.isBlank() || it.whatsappPackage == packageName)
+            }
             if (groups.isEmpty()) {
                 _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "لا توجد قروبات محددة وقابلة للنشر")
                 return@launch
@@ -330,6 +336,13 @@ object PublishController {
 
                 val result = publishOne(run, item, absoluteIndex - 1)
                 repository.updatePublishItem(item.id, result.status, result.detail, incrementAttempt = false, verified = result.verified)
+                repository.groupByName(item.groupName, run.targetPackage)?.let { group ->
+                    repository.updateGroupPublishState(
+                        group.id,
+                        result.status,
+                        if (result.status == PublishStatus.FAILED || result.status == PublishStatus.UNCERTAIN) result.detail else null
+                    )
+                }
                 refreshStats(runId)
                 _state.value = _state.value.copy(info = result.detail ?: result.status.labelAr)
                 notifier.show(_state.value)
@@ -415,7 +428,9 @@ object PublishController {
             _state.value = _state.value.copy(currentAttempt = attempt, status = PublishEngineStatus.OPENING_GROUP, info = "فتح ${item.groupName} • محاولة $attempt/${run.maxAttempts}")
             repository.updatePublishItem(item.id, PublishStatus.OPENING, "فتح القروب — محاولة $attempt", incrementAttempt = true)
 
-            val opened = openVerifiedGroup(item.groupName, run.targetPackage, _state.value.speed.uiTimeoutMs)
+            val groupRecord = repository.groupByName(item.groupName, run.targetPackage)
+                ?: return PublishDecision(PublishStatus.FAILED, "سجل القروب غير موجود في قاعدة المزامنة")
+            val opened = openVerifiedGroup(groupRecord, run.targetPackage, _state.value.speed.uiTimeoutMs)
             if (!opened) {
                 if (attempt < run.maxAttempts) {
                     _state.value = _state.value.copy(status = PublishEngineStatus.RETRYING, info = "تعذر فتح القروب — إعادة المحاولة")
@@ -534,6 +549,11 @@ object PublishController {
         }
 
         val chatVisible = waitUntil(4_500L) { adapter.isGroupVisible(service?.currentRoot(), item.groupName, run.targetPackage) }
+        if (chatVisible) {
+            repository.groupByName(item.groupName, run.targetPackage)?.let {
+                repository.recordGroupAccessSuccess(it.id, GroupAccessMethod.SHARE_PICKER)
+            }
+        }
         if (!chatVisible) {
             return PublishDecision(PublishStatus.UNCERTAIN, "تم تنفيذ مشاركة المرفق لكن تعذر إثبات النتيجة؛ لن تتم إعادة الإرسال تلقائيًا")
         }
@@ -555,35 +575,47 @@ object PublishController {
         return PublishDecision(PublishStatus.SENT, "تم تنفيذ مشاركة المرفق ووصل التطبيق إلى القروب المحدد", false)
     }
 
-    private suspend fun openVerifiedGroup(groupName: String, packageName: String, timeoutMs: Long): Boolean {
+    private suspend fun openVerifiedGroup(group: TargetGroup, packageName: String, timeoutMs: Long): Boolean {
         if (!openTargetWhatsApp(packageName)) return false
-        awaitEventOrDelay(150)
+        awaitEventOrDelay(120)
         val svc = service ?: return false
+        val timing = publishAccessTiming(_state.value.speed)
 
-        // Recover to main chat list. Avoid using a search button inside the currently open chat.
-        var recoverySteps = 0
-        while (recoverySteps < 3 && adapter.collectChatListCandidates(svc.currentRoot()).size < 2) {
-            svc.performBack()
-            awaitEventOrDelay(170)
-            recoverySteps++
+        val access = accessRouter.open(
+            group = group,
+            service = svc,
+            expectedPackage = packageName,
+            timing = timing,
+            waitForUi = { ms -> awaitEventOrDelay(ms.coerceAtMost(timeoutMs)) },
+            ensureForeground = { openTargetWhatsApp(packageName) },
+            maxScrollPasses = 300,
+            allowSearchFallback = true
+        )
+        if (!access.opened) {
+            access.attempted.lastOrNull()?.let { repository.recordGroupAccessFailure(group.id, it) }
+            return false
         }
+        repository.recordGroupAccessSuccess(group.id, access.method)
+        if (group.whatsappPackage.isBlank()) repository.updateGroupIdentity(group.id, group.jidOrGroupId, packageName)
 
+        // Verify the opened target is actually a group before writing. This verification is cached
+        // in GroupRecord after success, but a fresh UI check is still used when the record was not
+        // previously verified.
+        if (group.verifiedGroup) return adapter.isGroupVisible(svc.currentRoot(), group.name, packageName)
         var root = svc.currentRoot()
-        if (!adapter.findAndClickSearch(root)) return false
-        awaitEventOrDelay(260)
-        root = svc.currentRoot()
-        if (!adapter.setSearchText(root, groupName)) return false
-        awaitEventOrDelay(260)
-        root = svc.currentRoot()
-        if (!adapter.openSearchResult(root, groupName)) return false
-        if (!waitUntil(timeoutMs.coerceIn(3_000L, 8_000L)) { adapter.isGroupVisible(service?.currentRoot(), groupName, packageName) }) return false
-
-        // Verify it is really a group, not a contact with the same display name.
-        root = svc.currentRoot()
-        if (!adapter.openCurrentChatInfo(root, groupName)) return false
+        if (!adapter.openCurrentChatInfo(root, group.name)) return false
         val groupInfo = waitUntil(3_500L) { adapter.isGroupInfoScreen(service?.currentRoot()) }
-        svc.performBack(); waitUntil(3_000L) { adapter.isGroupVisible(service?.currentRoot(), groupName, packageName) }
-        return groupInfo && adapter.isGroupVisible(svc.currentRoot(), groupName, packageName)
+        svc.performBack()
+        waitUntil(3_000L) { adapter.isGroupVisible(service?.currentRoot(), group.name, packageName) }
+        if (groupInfo) repository.updateGroupCapabilities(group.id, verified = true, active = true, publishable = !group.communityParent, communityParent = group.communityParent)
+        return groupInfo && adapter.isGroupVisible(svc.currentRoot(), group.name, packageName)
+    }
+
+    private fun publishAccessTiming(speed: PublishSpeedProfile): TimingPolicy = when (speed) {
+        PublishSpeedProfile.TURBO -> ExtractionPolicy.timing(SpeedProfile.HYPER)
+        PublishSpeedProfile.FAST -> ExtractionPolicy.timing(SpeedProfile.ADAPTIVE)
+        PublishSpeedProfile.ADAPTIVE -> ExtractionPolicy.timing(SpeedProfile.SMART)
+        PublishSpeedProfile.SAFE -> ExtractionPolicy.timing(SpeedProfile.SAFE)
     }
 
     private fun openTargetWhatsApp(packageName: String): Boolean = runCatching {

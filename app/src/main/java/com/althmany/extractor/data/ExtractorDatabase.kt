@@ -28,7 +28,7 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
             """
             CREATE TABLE target_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                name TEXT NOT NULL COLLATE NOCASE,
                 selected INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 extracted_count INTEGER NOT NULL DEFAULT 0,
@@ -41,7 +41,20 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                 publishable INTEGER NOT NULL DEFAULT 1,
                 community_parent INTEGER NOT NULL DEFAULT 0,
                 last_synced_at INTEGER,
-                last_completed_at INTEGER
+                last_completed_at INTEGER,
+                jid_or_group_id TEXT,
+                whatsapp_package TEXT NOT NULL DEFAULT '',
+                last_known_access_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                preferred_access_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                last_successful_open_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                access_success_count INTEGER NOT NULL DEFAULT 0,
+                access_failure_count INTEGER NOT NULL DEFAULT 0,
+                last_opened_at INTEGER,
+                sync_order INTEGER NOT NULL DEFAULT 2147483647,
+                last_publish_status TEXT,
+                last_published_at INTEGER,
+                last_publish_error TEXT,
+                UNIQUE(name, whatsapp_package)
             )
             """.trimIndent()
         )
@@ -55,6 +68,10 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                 occurrences INTEGER NOT NULL DEFAULT 1,
                 first_seen INTEGER NOT NULL,
                 last_seen INTEGER NOT NULL,
+                category TEXT NOT NULL DEFAULT 'OTHER',
+                invite_code TEXT,
+                source_group_id INTEGER,
+                whatsapp_package TEXT,
                 UNIQUE(normalized_url, group_name)
             )
             """.trimIndent()
@@ -154,6 +171,8 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         db.execSQL("CREATE INDEX idx_groups_selected_status ON target_groups(selected,status,id)")
         db.execSQL("CREATE INDEX idx_groups_unread ON target_groups(unread_count,id)")
         db.execSQL("CREATE INDEX idx_groups_active ON target_groups(active,publishable,id)")
+        db.execSQL("CREATE INDEX idx_groups_package_order ON target_groups(whatsapp_package,sync_order,id)")
+        db.execSQL("CREATE INDEX idx_groups_access ON target_groups(last_successful_open_method,preferred_access_method,id)")
         db.execSQL("CREATE INDEX idx_scan_status_id ON scan_items(status,id)")
         db.execSQL("CREATE INDEX idx_publish_run_status_id ON publish_items(run_id,status,id)")
     }
@@ -274,13 +293,80 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
             runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN attachment_mime TEXT") }
             runCatching { db.execSQL("ALTER TABLE publish_runs ADD COLUMN run_token TEXT NOT NULL DEFAULT ''") }
         }
+        if (oldVersion < 9) {
+            // Rebuild the group table so identity is scoped by WhatsApp package instead of display name only.
+            // AccessibilityNodeInfo is deliberately never persisted; only stable metadata/access hints are kept.
+            db.execSQL("ALTER TABLE target_groups RENAME TO target_groups_legacy")
+            db.execSQL(
+                """
+                CREATE TABLE target_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    selected INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    extracted_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    discovered INTEGER NOT NULL DEFAULT 0,
+                    verified_group INTEGER NOT NULL DEFAULT 0,
+                    unread_count INTEGER NOT NULL DEFAULT 0,
+                    activity_text TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    publishable INTEGER NOT NULL DEFAULT 1,
+                    community_parent INTEGER NOT NULL DEFAULT 0,
+                    last_synced_at INTEGER,
+                    last_completed_at INTEGER,
+                    jid_or_group_id TEXT,
+                    whatsapp_package TEXT NOT NULL DEFAULT '',
+                    last_known_access_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    preferred_access_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    last_successful_open_method TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    access_success_count INTEGER NOT NULL DEFAULT 0,
+                    access_failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_opened_at INTEGER,
+                    sync_order INTEGER NOT NULL DEFAULT 2147483647,
+                    last_publish_status TEXT,
+                    last_published_at INTEGER,
+                    last_publish_error TEXT,
+                    UNIQUE(name, whatsapp_package)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO target_groups(
+                    id,name,selected,status,extracted_count,last_error,discovered,verified_group,
+                    unread_count,activity_text,active,publishable,community_parent,last_synced_at,last_completed_at
+                )
+                SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,
+                    unread_count,activity_text,active,publishable,community_parent,last_synced_at,last_completed_at
+                FROM target_groups_legacy
+                """.trimIndent()
+            )
+            db.execSQL("DROP TABLE target_groups_legacy")
+            runCatching { db.execSQL("ALTER TABLE extracted_links ADD COLUMN category TEXT NOT NULL DEFAULT 'OTHER'") }
+            runCatching { db.execSQL("ALTER TABLE extracted_links ADD COLUMN invite_code TEXT") }
+            runCatching { db.execSQL("ALTER TABLE extracted_links ADD COLUMN source_group_id INTEGER") }
+            runCatching { db.execSQL("ALTER TABLE extracted_links ADD COLUMN whatsapp_package TEXT") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_selected_status ON target_groups(selected,status,id)") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_unread ON target_groups(unread_count,id)") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_active ON target_groups(active,publishable,id)") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_package_order ON target_groups(whatsapp_package,sync_order,id)") }
+            runCatching { db.execSQL("CREATE INDEX IF NOT EXISTS idx_groups_access ON target_groups(last_successful_open_method,preferred_access_method,id)") }
+        }
+        if (oldVersion < 10) {
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN last_publish_status TEXT") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN last_published_at INTEGER") }
+            runCatching { db.execSQL("ALTER TABLE target_groups ADD COLUMN last_publish_error TEXT") }
+        }
     }
 
-    fun upsertGroupName(name: String, discovered: Boolean = false): Long {
+    fun upsertGroupName(name: String, discovered: Boolean = false, whatsappPackage: String = ""): Long {
         val clean = name.trim()
         if (clean.isBlank()) return -1
+        val pkg = whatsappPackage.trim()
         val values = ContentValues().apply {
             put("name", clean)
+            put("whatsapp_package", pkg)
             put("selected", 1)
             put("status", if (discovered) GroupStatus.DISCOVERED.name else GroupStatus.PENDING.name)
             put("discovered", if (discovered) 1 else 0)
@@ -288,20 +374,22 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         writableDatabase.insertWithOnConflict("target_groups", null, values, SQLiteDatabase.CONFLICT_IGNORE)
         if (!discovered) {
             writableDatabase.execSQL(
-                "UPDATE target_groups SET selected=1, discovered=0 WHERE name=? COLLATE NOCASE",
-                arrayOf(clean)
+                "UPDATE target_groups SET selected=1, discovered=0 WHERE name=? COLLATE NOCASE AND whatsapp_package=?",
+                arrayOf(clean, pkg)
             )
         }
         readableDatabase.rawQuery(
-            "SELECT id FROM target_groups WHERE name = ? COLLATE NOCASE LIMIT 1", arrayOf(clean)
+            "SELECT id FROM target_groups WHERE name = ? COLLATE NOCASE AND whatsapp_package=? LIMIT 1",
+            arrayOf(clean, pkg)
         ).use { c -> return if (c.moveToFirst()) c.getLong(0) else -1 }
     }
 
-    fun replaceGroups(names: List<String>) {
+    fun replaceGroups(names: List<String>, whatsappPackage: String = "") {
+        val pkg = whatsappPackage.trim()
         writableDatabase.beginTransaction()
         try {
             names.map(String::trim).filter(String::isNotEmpty).distinctBy(String::lowercase)
-                .forEach { upsertGroupName(it, discovered = false) }
+                .forEach { upsertGroupName(it, discovered = false, whatsappPackage = pkg) }
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
     }
@@ -312,7 +400,7 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         try {
             names.map(String::trim).filter(String::isNotEmpty).distinctBy(String::lowercase).forEach { name ->
                 val before = readableDatabase.rawQuery(
-                    "SELECT COUNT(*) FROM target_groups WHERE name=? COLLATE NOCASE", arrayOf(name)
+                    "SELECT COUNT(*) FROM target_groups WHERE name=? COLLATE NOCASE AND whatsapp_package=''", arrayOf(name)
                 ).use { c -> c.moveToFirst(); c.getInt(0) }
                 upsertGroupName(name, discovered = true)
                 if (before == 0) added++
@@ -327,15 +415,43 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         val now = System.currentTimeMillis()
         val deduped = candidates
             .filter { it.name.isNotBlank() }
-            .distinctBy { it.name.trim().lowercase() }
+            .distinctBy { "${it.whatsappPackage.trim()}|${it.name.trim().lowercase()}" }
         writableDatabase.beginTransaction()
         try {
             deduped.forEach { candidate ->
                 val clean = candidate.name.trim()
-                val before = readableDatabase.rawQuery(
-                    "SELECT COUNT(*) FROM target_groups WHERE name=? COLLATE NOCASE", arrayOf(clean)
-                ).use { c -> c.moveToFirst(); c.getInt(0) }
-                upsertGroupName(clean, discovered = true)
+                val pkg = candidate.whatsappPackage.trim()
+                var exactId = readableDatabase.rawQuery(
+                    "SELECT id FROM target_groups WHERE name=? COLLATE NOCASE AND whatsapp_package=? LIMIT 1",
+                    arrayOf(clean, pkg)
+                ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+                val legacyId = if (pkg.isNotBlank()) readableDatabase.rawQuery(
+                    "SELECT id FROM target_groups WHERE name=? COLLATE NOCASE AND whatsapp_package='' LIMIT 1",
+                    arrayOf(clean)
+                ).use { c -> if (c.moveToFirst()) c.getLong(0) else null } else null
+
+                // v9 migration may leave old package-less rows. Bind them to the selected WhatsApp
+                // instead of creating a second logical GroupRecord for the same chat. If an exact
+                // package-scoped row already exists, merge the user selection and remove the stale row.
+                val existedBefore = exactId != null || legacyId != null
+                if (exactId == null && legacyId != null) {
+                    writableDatabase.update(
+                        "target_groups",
+                        ContentValues().apply { put("whatsapp_package", pkg) },
+                        "id=?", arrayOf(legacyId.toString())
+                    )
+                    exactId = legacyId
+                } else if (exactId != null && legacyId != null && exactId != legacyId) {
+                    writableDatabase.execSQL(
+                        "UPDATE target_groups SET selected=MAX(selected,(SELECT selected FROM target_groups WHERE id=?)), extracted_count=MAX(extracted_count,(SELECT extracted_count FROM target_groups WHERE id=?)) WHERE id=?",
+                        arrayOf<Any?>(legacyId, legacyId, exactId)
+                    )
+                    writableDatabase.delete("target_groups", "id=?", arrayOf(legacyId.toString()))
+                }
+
+                if (exactId == null) {
+                    exactId = upsertGroupName(clean, discovered = true, whatsappPackage = pkg)
+                }
                 writableDatabase.update(
                     "target_groups",
                     ContentValues().apply {
@@ -345,37 +461,66 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                         put("publishable", if (candidate.publishableHint) 1 else 0)
                         put("community_parent", if (candidate.communityParentHint) 1 else 0)
                         put("last_synced_at", now)
+                        put("whatsapp_package", pkg)
+                        if (candidate.jidOrGroupId == null) putNull("jid_or_group_id") else put("jid_or_group_id", candidate.jidOrGroupId)
+                        put("sync_order", candidate.syncOrder.coerceAtLeast(0))
+                        put("last_known_access_method", candidate.lastKnownAccessMethod.name)
+                        if (candidate.lastKnownAccessMethod != GroupAccessMethod.UNKNOWN) {
+                            put("preferred_access_method", candidate.lastKnownAccessMethod.name)
+                        }
                     },
-                    "name=? COLLATE NOCASE",
-                    arrayOf(clean)
+                    "id=?", arrayOf(exactId.toString())
                 )
-                if (before == 0) added++
+                if (!existedBefore) added++
             }
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
         return added
     }
 
+    private val groupSelectColumns = """
+        id,name,selected,status,extracted_count,last_error,discovered,verified_group,
+        unread_count,activity_text,active,publishable,community_parent,last_synced_at,
+        jid_or_group_id,whatsapp_package,last_known_access_method,preferred_access_method,
+        last_successful_open_method,access_success_count,access_failure_count,last_opened_at,sync_order,
+        last_publish_status,last_published_at,last_publish_error
+    """.trimIndent().replace("\n", " ")
+
     fun getGroups(): List<TargetGroup> = queryGroups(
-        "SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at FROM target_groups ORDER BY id",
+        "SELECT $groupSelectColumns FROM target_groups ORDER BY CASE WHEN sync_order=2147483647 THEN 1 ELSE 0 END,sync_order,id",
         null
     )
 
     fun getSelectedGroups(): List<TargetGroup> = queryGroups(
-        """
-        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at
-        FROM target_groups WHERE selected=1 ORDER BY id
-        """.trimIndent(), null
+        "SELECT $groupSelectColumns FROM target_groups WHERE selected=1 ORDER BY CASE WHEN sync_order=2147483647 THEN 1 ELSE 0 END,sync_order,id",
+        null
     )
 
-    fun getSelectedPendingGroups(): List<TargetGroup> = queryGroups(
-        """
-        SELECT id,name,selected,status,extracted_count,last_error,discovered,verified_group,unread_count,activity_text,active,publishable,community_parent,last_synced_at
-        FROM target_groups
-        WHERE selected=1 AND status NOT IN ('COMPLETED','SKIPPED_NOT_GROUP')
-        ORDER BY id
-        """.trimIndent(), null
-    )
+    fun getSelectedPendingGroups(whatsappPackage: String? = null): List<TargetGroup> {
+        val pkg = whatsappPackage?.trim().orEmpty()
+        return if (pkg.isBlank()) {
+            queryGroups(
+                "SELECT $groupSelectColumns FROM target_groups WHERE selected=1 AND status NOT IN ('COMPLETED','SKIPPED_NOT_GROUP') ORDER BY CASE WHEN sync_order=2147483647 THEN 1 ELSE 0 END,sync_order,id",
+                null
+            )
+        } else {
+            queryGroups(
+                "SELECT $groupSelectColumns FROM target_groups WHERE selected=1 AND status NOT IN ('COMPLETED','SKIPPED_NOT_GROUP') AND (whatsapp_package=? OR whatsapp_package='') ORDER BY CASE WHEN whatsapp_package=? THEN 0 ELSE 1 END,CASE WHEN sync_order=2147483647 THEN 1 ELSE 0 END,sync_order,id",
+                arrayOf(pkg, pkg)
+            )
+        }
+    }
+
+    fun getGroupByName(name: String, whatsappPackage: String? = null): TargetGroup? {
+        val pkg = whatsappPackage?.trim()
+        val sql = if (pkg.isNullOrEmpty()) {
+            "SELECT $groupSelectColumns FROM target_groups WHERE name=? COLLATE NOCASE ORDER BY last_opened_at DESC,id LIMIT 1"
+        } else {
+            "SELECT $groupSelectColumns FROM target_groups WHERE name=? COLLATE NOCASE AND (whatsapp_package=? OR whatsapp_package='') ORDER BY CASE WHEN whatsapp_package=? THEN 0 ELSE 1 END,last_opened_at DESC,id LIMIT 1"
+        }
+        val args = if (pkg.isNullOrEmpty()) arrayOf(name.trim()) else arrayOf(name.trim(), pkg, pkg)
+        return queryGroups(sql, args).firstOrNull()
+    }
 
     private fun queryGroups(sql: String, args: Array<String>?): List<TargetGroup> =
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -389,11 +534,87 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                         unreadCount = c.getInt(8), activityText = c.getString(9),
                         active = c.getInt(10) == 1, publishable = c.getInt(11) == 1,
                         communityParent = c.getInt(12) == 1,
-                        lastSyncedAt = if (c.isNull(13)) null else c.getLong(13)
+                        lastSyncedAt = if (c.isNull(13)) null else c.getLong(13),
+                        jidOrGroupId = if (c.isNull(14)) null else c.getString(14),
+                        whatsappPackage = c.getString(15).orEmpty(),
+                        lastKnownAccessMethod = runCatching { GroupAccessMethod.valueOf(c.getString(16)) }.getOrDefault(GroupAccessMethod.UNKNOWN),
+                        preferredAccessMethod = runCatching { GroupAccessMethod.valueOf(c.getString(17)) }.getOrDefault(GroupAccessMethod.UNKNOWN),
+                        lastSuccessfulOpenMethod = runCatching { GroupAccessMethod.valueOf(c.getString(18)) }.getOrDefault(GroupAccessMethod.UNKNOWN),
+                        accessSuccessCount = c.getInt(19),
+                        accessFailureCount = c.getInt(20),
+                        lastOpenedAt = if (c.isNull(21)) null else c.getLong(21),
+                        syncOrder = c.getInt(22),
+                        lastPublishStatus = if (c.isNull(23)) null else c.getString(23),
+                        lastPublishedAt = if (c.isNull(24)) null else c.getLong(24),
+                        lastPublishError = if (c.isNull(25)) null else c.getString(25)
                     )
                 )
             }
         }
+
+    fun updateGroupAccessSuccess(id: Long, method: GroupAccessMethod) {
+        writableDatabase.execSQL(
+            """
+            UPDATE target_groups
+            SET last_known_access_method=?, last_successful_open_method=?, preferred_access_method=?,
+                access_success_count=access_success_count+1, last_opened_at=?
+            WHERE id=?
+            """.trimIndent(),
+            arrayOf<Any?>(method.name, method.name, method.name, System.currentTimeMillis(), id)
+        )
+    }
+
+    fun updateGroupAccessFailure(id: Long, attempted: GroupAccessMethod) {
+        writableDatabase.execSQL(
+            """
+            UPDATE target_groups
+            SET last_known_access_method=?, access_failure_count=access_failure_count+1
+            WHERE id=?
+            """.trimIndent(),
+            arrayOf<Any?>(attempted.name, id)
+        )
+    }
+
+    fun updateGroupIdentity(id: Long, jidOrGroupId: String?, whatsappPackage: String) {
+        val pkg = whatsappPackage.trim()
+        val currentName = readableDatabase.rawQuery("SELECT name FROM target_groups WHERE id=?", arrayOf(id.toString())).use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: return
+        val collision = if (pkg.isBlank()) null else readableDatabase.rawQuery(
+            "SELECT id FROM target_groups WHERE name=? COLLATE NOCASE AND whatsapp_package=? AND id<>? LIMIT 1",
+            arrayOf(currentName, pkg, id.toString())
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+        if (collision != null) {
+            writableDatabase.execSQL(
+                "UPDATE target_groups SET selected=MAX(selected,(SELECT selected FROM target_groups WHERE id=?)), extracted_count=MAX(extracted_count,(SELECT extracted_count FROM target_groups WHERE id=?)) WHERE id=?",
+                arrayOf<Any?>(id, id, collision)
+            )
+            writableDatabase.delete("target_groups", "id=?", arrayOf(id.toString()))
+            return
+        }
+        writableDatabase.update(
+            "target_groups",
+            ContentValues().apply {
+                if (jidOrGroupId == null) putNull("jid_or_group_id") else put("jid_or_group_id", jidOrGroupId)
+                put("whatsapp_package", pkg)
+            },
+            "id=?", arrayOf(id.toString())
+        )
+    }
+
+    fun updateGroupPublishState(id: Long, status: PublishStatus, error: String? = null) {
+        writableDatabase.update(
+            "target_groups",
+            ContentValues().apply {
+                put("last_publish_status", status.name)
+                if (status in setOf(PublishStatus.SENT, PublishStatus.VERIFIED, PublishStatus.UNCERTAIN)) {
+                    put("last_published_at", System.currentTimeMillis())
+                }
+                if (error.isNullOrBlank()) putNull("last_publish_error") else put("last_publish_error", error.take(500))
+            },
+            "id=?", arrayOf(id.toString())
+        )
+    }
 
     fun setGroupSelected(id: Long, selected: Boolean) {
         writableDatabase.update("target_groups", ContentValues().apply { put("selected", if (selected) 1 else 0) }, "id=?", arrayOf(id.toString()))
@@ -403,17 +624,23 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         writableDatabase.update("target_groups", ContentValues().apply { put("selected", if (selected) 1 else 0) }, null, null)
     }
 
-    fun setSelectionPreset(preset: GroupSelectionPreset) {
+    fun setSelectionPreset(preset: GroupSelectionPreset, whatsappPackage: String? = null) {
         val db = writableDatabase
+        val pkg = whatsappPackage?.trim().orEmpty()
+        val scope = if (pkg.isBlank()) "" else " WHERE (whatsapp_package=? OR whatsapp_package='')"
+        val args = if (pkg.isBlank()) emptyArray<Any?>() else arrayOf<Any?>(pkg)
+        fun apply(expression: String) {
+            db.execSQL("UPDATE target_groups SET selected=$expression$scope", args)
+        }
         db.beginTransaction()
         try {
             when (preset) {
-                GroupSelectionPreset.ALL -> db.execSQL("UPDATE target_groups SET selected=1")
-                GroupSelectionPreset.NONE -> db.execSQL("UPDATE target_groups SET selected=0")
-                GroupSelectionPreset.UNREAD -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN unread_count>0 THEN 1 ELSE 0 END")
-                GroupSelectionPreset.ACTIVE -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN active=1 THEN 1 ELSE 0 END")
-                GroupSelectionPreset.PUBLISHABLE -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN publishable=1 AND community_parent=0 THEN 1 ELSE 0 END")
-                GroupSelectionPreset.UNVERIFIED -> db.execSQL("UPDATE target_groups SET selected=CASE WHEN verified_group=0 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.ALL -> apply("1")
+                GroupSelectionPreset.NONE -> apply("0")
+                GroupSelectionPreset.UNREAD -> apply("CASE WHEN unread_count>0 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.ACTIVE -> apply("CASE WHEN active=1 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.PUBLISHABLE -> apply("CASE WHEN publishable=1 AND community_parent=0 THEN 1 ELSE 0 END")
+                GroupSelectionPreset.UNVERIFIED -> apply("CASE WHEN verified_group=0 THEN 1 ELSE 0 END")
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -456,14 +683,18 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         )
     }
 
-    fun resetRunStatuses() {
+    fun resetRunStatuses(whatsappPackage: String? = null) {
+        val pkg = whatsappPackage?.trim().orEmpty()
+        val packageClause = if (pkg.isBlank()) "" else " AND (whatsapp_package=? OR whatsapp_package='')"
+        val args = if (pkg.isBlank()) emptyArray<Any?>() else arrayOf<Any?>(pkg)
         writableDatabase.execSQL(
             """
             UPDATE target_groups
             SET status=CASE WHEN discovered=1 AND verified_group=0 THEN 'DISCOVERED' ELSE 'PENDING' END,
                 last_error=NULL
-            WHERE selected=1 AND status!='SKIPPED_NOT_GROUP'
-            """.trimIndent()
+            WHERE selected=1 AND status!='SKIPPED_NOT_GROUP'$packageClause
+            """.trimIndent(),
+            args
         )
     }
 
@@ -506,8 +737,8 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
      * This removes one IO context switch + one transaction per URL from the hot extraction loop.
      */
     fun upsertLinksBatch(
-        links: List<Pair<String, String>>,
-        groupName: String,
+        links: List<LinkCandidate>,
+        group: TargetGroup,
         timestamp: Long
     ): Int {
         if (links.isEmpty()) return 0
@@ -515,14 +746,18 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         var insertedCount = 0
         db.beginTransaction()
         try {
-            links.forEach { (url, normalizedUrl) ->
+            links.forEach { link ->
                 val values = ContentValues().apply {
-                    put("url", url)
-                    put("normalized_url", normalizedUrl)
-                    put("group_name", groupName)
+                    put("url", link.url)
+                    put("normalized_url", link.normalizedUrl)
+                    put("group_name", group.name)
                     put("occurrences", 1)
                     put("first_seen", timestamp)
                     put("last_seen", timestamp)
+                    put("category", link.category.name)
+                    if (link.inviteCode == null) putNull("invite_code") else put("invite_code", link.inviteCode)
+                    put("source_group_id", group.id)
+                    if (group.whatsappPackage.isBlank()) putNull("whatsapp_package") else put("whatsapp_package", group.whatsappPackage)
                 }
                 val inserted = db.insertWithOnConflict(
                     "extracted_links",
@@ -534,15 +769,22 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
                     insertedCount++
                 } else {
                     db.execSQL(
-                        "UPDATE extracted_links SET last_seen=?,url=? WHERE normalized_url=? AND group_name=? COLLATE NOCASE",
-                        arrayOf<Any?>(timestamp, url, normalizedUrl, groupName)
+                        """
+                        UPDATE extracted_links
+                        SET last_seen=?,url=?,category=?,invite_code=?,source_group_id=?,whatsapp_package=?
+                        WHERE normalized_url=? AND group_name=? COLLATE NOCASE
+                        """.trimIndent(),
+                        arrayOf<Any?>(
+                            timestamp, link.url, link.category.name, link.inviteCode, group.id,
+                            group.whatsappPackage.ifBlank { null }, link.normalizedUrl, group.name
+                        )
                     )
                 }
             }
             if (insertedCount > 0) {
                 db.execSQL(
-                    "UPDATE target_groups SET extracted_count=extracted_count+? WHERE name=? COLLATE NOCASE",
-                    arrayOf<Any?>(insertedCount, groupName)
+                    "UPDATE target_groups SET extracted_count=extracted_count+? WHERE id=?",
+                    arrayOf<Any?>(insertedCount, group.id)
                 )
             }
             db.setTransactionSuccessful()
@@ -554,13 +796,20 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
 
     fun getLinks(limit: Int = 50_000): List<LinkRecord> = readableDatabase.rawQuery(
         """
-        SELECT id,url,normalized_url,group_name,occurrences,first_seen,last_seen
+        SELECT id,url,normalized_url,group_name,occurrences,first_seen,last_seen,category,invite_code,source_group_id,whatsapp_package
         FROM extracted_links ORDER BY last_seen DESC LIMIT ?
         """.trimIndent(), arrayOf(limit.toString())
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
-                LinkRecord(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4), c.getLong(5), c.getLong(6))
+                LinkRecord(
+                    id = c.getLong(0), url = c.getString(1), normalizedUrl = c.getString(2), groupName = c.getString(3),
+                    occurrences = c.getInt(4), firstSeen = c.getLong(5), lastSeen = c.getLong(6),
+                    category = runCatching { LinkCategory.valueOf(c.getString(7)) }.getOrDefault(LinkCategory.OTHER),
+                    inviteCode = if (c.isNull(8)) null else c.getString(8),
+                    sourceGroupId = if (c.isNull(9)) null else c.getLong(9),
+                    whatsappPackage = if (c.isNull(10)) null else c.getString(10)
+                )
             )
         }
     }
@@ -780,13 +1029,15 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         val direct = counts[ScanStatus.DIRECT.name] ?: 0
         val approval = counts[ScanStatus.APPROVAL.name] ?: 0
         val requestPending = counts[ScanStatus.REQUEST_PENDING.name] ?: 0
+        val joined = counts[ScanStatus.JOINED.name] ?: 0
+        val actionUncertain = counts[ScanStatus.ACTION_UNCERTAIN.name] ?: 0
         val already = counts[ScanStatus.ALREADY_MEMBER.name] ?: 0
         val invalid = (counts[ScanStatus.INVALID.name] ?: 0) + (counts[ScanStatus.FULL.name] ?: 0) +
             (counts[ScanStatus.REMOVED.name] ?: 0) + (counts[ScanStatus.ACCOUNT_LIMIT.name] ?: 0)
         val network = counts[ScanStatus.NETWORK_ERROR.name] ?: 0
         val unknown = counts[ScanStatus.UNKNOWN.name] ?: 0
-        val accounted = pending + direct + approval + requestPending + already + invalid + network + unknown
-        return ScanStats(total, pending, direct, approval, requestPending, already, invalid, network, unknown, (total - accounted).coerceAtLeast(0))
+        val accounted = pending + direct + approval + requestPending + joined + actionUncertain + already + invalid + network + unknown
+        return ScanStats(total, pending, direct, approval, requestPending, joined, actionUncertain, already, invalid, network, unknown, (total - accounted).coerceAtLeast(0))
     }
 
     fun getStats(): ExtractionStats {
@@ -957,6 +1208,6 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
 
     companion object {
         private const val DB_NAME = "althmany_extractor.db"
-        private const val DB_VERSION = 8
+        private const val DB_VERSION = 10
     }
 }

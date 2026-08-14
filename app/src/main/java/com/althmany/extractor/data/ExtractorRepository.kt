@@ -6,29 +6,39 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class ExtractorRepository(private val db: ExtractorDatabase) {
-    suspend fun addGroupsFromText(text: String) = withContext(Dispatchers.IO) {
-        db.replaceGroups(text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList())
+    suspend fun addGroupsFromText(text: String, whatsappPackage: String = "") = withContext(Dispatchers.IO) {
+        db.replaceGroups(text.lineSequence().map(String::trim).filter(String::isNotEmpty).toList(), whatsappPackage)
     }
     suspend fun addDiscoveredGroups(names: Collection<String>): Int = withContext(Dispatchers.IO) { db.addDiscoveredGroups(names) }
     suspend fun addDiscoveredGroupCandidates(candidates: Collection<GroupSyncCandidate>): Int = withContext(Dispatchers.IO) {
         db.addDiscoveredGroupCandidates(candidates)
     }
     suspend fun groups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getGroups() }
-    suspend fun pendingSelectedGroups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getSelectedPendingGroups() }
+    suspend fun groupByName(name: String, whatsappPackage: String? = null): TargetGroup? =
+        withContext(Dispatchers.IO) { db.getGroupByName(name, whatsappPackage) }
+    suspend fun pendingSelectedGroups(whatsappPackage: String? = null): List<TargetGroup> = withContext(Dispatchers.IO) { db.getSelectedPendingGroups(whatsappPackage) }
     suspend fun selectedGroups(): List<TargetGroup> = withContext(Dispatchers.IO) { db.getSelectedGroups() }
     suspend fun setSelected(id: Long, selected: Boolean) = withContext(Dispatchers.IO) { db.setGroupSelected(id, selected) }
     suspend fun setAllSelected(selected: Boolean) = withContext(Dispatchers.IO) { db.setAllGroupsSelected(selected) }
-    suspend fun setSelectionPreset(preset: GroupSelectionPreset) = withContext(Dispatchers.IO) { db.setSelectionPreset(preset) }
+    suspend fun setSelectionPreset(preset: GroupSelectionPreset, whatsappPackage: String? = null) = withContext(Dispatchers.IO) { db.setSelectionPreset(preset, whatsappPackage) }
     suspend fun updateStatus(id: Long, status: GroupStatus, error: String? = null) = withContext(Dispatchers.IO) { db.updateGroupStatus(id, status, error) }
     suspend fun markVerifiedGroup(id: Long, verified: Boolean) = withContext(Dispatchers.IO) { db.markVerifiedGroup(id, verified) }
     suspend fun updateGroupCapabilities(id: Long, verified: Boolean, active: Boolean, publishable: Boolean, communityParent: Boolean = false) =
         withContext(Dispatchers.IO) { db.updateGroupCapabilities(id, verified, active, publishable, communityParent) }
-    suspend fun resetRunStatuses() = withContext(Dispatchers.IO) { db.resetRunStatuses() }
+    suspend fun recordGroupAccessSuccess(id: Long, method: GroupAccessMethod) =
+        withContext(Dispatchers.IO) { db.updateGroupAccessSuccess(id, method) }
+    suspend fun recordGroupAccessFailure(id: Long, method: GroupAccessMethod) =
+        withContext(Dispatchers.IO) { db.updateGroupAccessFailure(id, method) }
+    suspend fun updateGroupIdentity(id: Long, jidOrGroupId: String?, whatsappPackage: String) =
+        withContext(Dispatchers.IO) { db.updateGroupIdentity(id, jidOrGroupId, whatsappPackage) }
+    suspend fun updateGroupPublishState(id: Long, status: PublishStatus, error: String? = null) =
+        withContext(Dispatchers.IO) { db.updateGroupPublishState(id, status, error) }
+    suspend fun resetRunStatuses(whatsappPackage: String? = null) = withContext(Dispatchers.IO) { db.resetRunStatuses(whatsappPackage) }
     suspend fun saveLink(url: String, normalized: String, groupName: String): Boolean = withContext(Dispatchers.IO) {
         db.upsertLink(url, normalized, groupName, System.currentTimeMillis())
     }
-    suspend fun saveLinksBatch(links: List<Pair<String, String>>, groupName: String): Int = withContext(Dispatchers.IO) {
-        db.upsertLinksBatch(links, groupName, System.currentTimeMillis())
+    suspend fun saveLinksBatch(links: List<LinkCandidate>, group: TargetGroup): Int = withContext(Dispatchers.IO) {
+        db.upsertLinksBatch(links, group, System.currentTimeMillis())
     }
     suspend fun saveCheckpoint(checkpoint: GroupCheckpoint) = withContext(Dispatchers.IO) { db.saveCheckpoint(checkpoint) }
     suspend fun checkpoint(groupName: String): GroupCheckpoint? = withContext(Dispatchers.IO) { db.getCheckpoint(groupName) }

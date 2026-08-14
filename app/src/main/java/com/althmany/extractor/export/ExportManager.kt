@@ -5,7 +5,6 @@ import android.net.Uri
 import com.althmany.extractor.data.LinkRecord
 import com.althmany.extractor.data.ScanRecord
 import com.althmany.extractor.data.PublishItem
-import com.althmany.extractor.engine.LinkExtractor
 import java.io.BufferedWriter
 import java.io.OutputStreamWriter
 import java.util.zip.ZipEntry
@@ -49,9 +48,9 @@ object ExportManager {
     private fun exportCsv(resolver: ContentResolver, uri: Uri, links: List<LinkRecord>) {
         resolver.openOutputStream(uri)?.use { out ->
             BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { w ->
-                w.write("URL,Normalized URL,Category,Group,Verified Occurrences,First Seen,Last Seen\n")
+                w.write("URL,Normalized URL,Category,Invite Code,Source Group,Source Group ID,WhatsApp Package,Duplicate,Verified Occurrences,First Seen,Last Seen\n")
                 links.forEach { r ->
-                    w.write(listOf(r.url, r.normalizedUrl, LinkExtractor.category(r.normalizedUrl).labelAr, r.groupName, r.occurrences.toString(), r.firstSeen.toString(), r.lastSeen.toString())
+                    w.write(listOf(r.url, r.normalizedUrl, r.category.labelAr, r.inviteCode.orEmpty(), r.groupName, r.sourceGroupId?.toString().orEmpty(), r.whatsappPackage.orEmpty(), r.duplicate.toString(), r.occurrences.toString(), r.firstSeen.toString(), r.lastSeen.toString())
                         .joinToString(",") { csv(it) })
                     w.newLine()
                 }
@@ -63,7 +62,7 @@ object ExportManager {
         resolver.openOutputStream(uri)?.use { out ->
             BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { w ->
                 links.forEach { r ->
-                    w.write("${r.url}\t${LinkExtractor.category(r.normalizedUrl).labelAr}\t${r.groupName}\t${r.normalizedUrl}")
+                    w.write("${r.url}\t${r.category.labelAr}\t${r.inviteCode.orEmpty()}\t${r.groupName}\t${r.sourceGroupId ?: ""}\t${r.whatsappPackage.orEmpty()}\t${r.normalizedUrl}")
                     w.newLine()
                 }
             }
@@ -75,7 +74,7 @@ object ExportManager {
             BufferedWriter(OutputStreamWriter(out, Charsets.UTF_8)).use { w ->
                 w.write("[\n")
                 links.forEachIndexed { i, r ->
-                    w.write("  {\"url\":\"${json(r.url)}\",\"normalizedUrl\":\"${json(r.normalizedUrl)}\",\"category\":\"${json(LinkExtractor.category(r.normalizedUrl).labelAr)}\",\"group\":\"${json(r.groupName)}\",\"sourceCount\":${r.occurrences},\"firstSeen\":${r.firstSeen},\"lastSeen\":${r.lastSeen}}")
+                    w.write("  {\"url\":\"${json(r.url)}\",\"normalizedUrl\":\"${json(r.normalizedUrl)}\",\"category\":\"${json(r.category.labelAr)}\",\"inviteCode\":\"${json(r.inviteCode.orEmpty())}\",\"sourceGroup\":\"${json(r.groupName)}\",\"sourceGroupId\":${r.sourceGroupId ?: 0},\"whatsappPackage\":\"${json(r.whatsappPackage.orEmpty())}\",\"duplicate\":${r.duplicate},\"sourceCount\":${r.occurrences},\"firstSeen\":${r.firstSeen},\"lastSeen\":${r.lastSeen}}")
                     if (i != links.lastIndex) w.write(",")
                     w.newLine()
                 }
@@ -119,9 +118,9 @@ object ExportManager {
                 val sheet = buildString {
                     append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
                     append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>")
-                    row(1, listOf("URL", "Normalized URL", "Category", "Group", "Verified Occurrences", "First Seen", "Last Seen"))
+                    row(1, listOf("URL", "Normalized URL", "Category", "Invite Code", "Source Group", "Source Group ID", "WhatsApp Package", "Duplicate", "Verified Occurrences", "First Seen", "Last Seen"))
                     links.forEachIndexed { i, r ->
-                        row(i + 2, listOf(r.url, r.normalizedUrl, LinkExtractor.category(r.normalizedUrl).labelAr, r.groupName, r.occurrences.toString(), r.firstSeen.toString(), r.lastSeen.toString()))
+                        row(i + 2, listOf(r.url, r.normalizedUrl, r.category.labelAr, r.inviteCode.orEmpty(), r.groupName, r.sourceGroupId?.toString().orEmpty(), r.whatsappPackage.orEmpty(), r.duplicate.toString(), r.occurrences.toString(), r.firstSeen.toString(), r.lastSeen.toString()))
                     }
                     append("</sheetData></worksheet>")
                 }
