@@ -1308,12 +1308,15 @@ object ExtractionController {
             throw IllegalStateException("Shizuku جاهز لكن UserService لم يرتبط")
         }
 
-        var tree = awaitShizukuTree(packageName, 1_200L)
-        if (tree == null) {
-            ShizukuBridge.launchPackage(appContext, packageName)
-            tree = awaitShizukuTree(packageName, 5_000L)
-                ?: throw IllegalStateException("Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile")
-        }
+        var tree: ShizukuUiTree =
+            awaitShizukuTree(packageName, 1_200L)
+                ?: run {
+                    ShizukuBridge.launchPackage(appContext, packageName)
+                    awaitShizukuTree(packageName, 5_000L)
+                        ?: throw IllegalStateException(
+                            "Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile"
+                        )
+                }
 
         // Reach Chats without blindly backing out of WhatsApp. Prefer bottom navigation first.
         var listReady = shizukuUi.isConversationListVisible(tree, packageName)

@@ -99,7 +99,7 @@ import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.export.ExportFormat
 
 
-enum class AppScreen { HOME, SCAN, PUBLISH, GROUPS, RESULTS, LOGS }
+enum class AppScreen { HOME, EXTRACT, SCAN, PUBLISH, GROUPS, RESULTS, LOGS, SETTINGS }
 
 @Composable
 fun BottomBar(current: AppScreen, onNavigate: (AppScreen) -> Unit) {

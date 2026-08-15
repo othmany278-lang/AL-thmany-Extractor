@@ -15,6 +15,21 @@ class PublishSettingsStore(context: Context) {
     fun maxAttempts(): Int = prefs.getInt("max_attempts", 2).coerceIn(1, 3)
     fun setMaxAttempts(value: Int) { prefs.edit().putInt("max_attempts", value.coerceIn(1, 3)).apply() }
 
+    fun navigationMode(): PublishNavigationMode = runCatching {
+        PublishNavigationMode.valueOf(
+            prefs.getString(
+                "navigation_mode",
+                PublishNavigationMode.AUTO.name
+            )!!
+        )
+    }.getOrDefault(PublishNavigationMode.AUTO)
+
+    fun setNavigationMode(value: PublishNavigationMode) {
+        prefs.edit()
+            .putString("navigation_mode", value.name)
+            .apply()
+    }
+
     fun lastMessage(): String = prefs.getString("last_message", "").orEmpty()
     fun setLastMessage(value: String) { prefs.edit().putString("last_message", value.take(16_000)).apply() }
 
