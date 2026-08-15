@@ -19,6 +19,7 @@ import com.althmany.extractor.engine.ScanController
 import com.althmany.extractor.engine.PublishController
 import com.althmany.extractor.engine.PublishUiState
 import com.althmany.extractor.engine.PublishSpeedProfile
+import com.althmany.extractor.engine.PublishNavigationMode
 import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.engine.ScanScope
 import com.althmany.extractor.engine.ScanActionMode
@@ -124,6 +125,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setTargetWhatsApp(packageName: String) = ExtractionController.setTargetWhatsAppPackage(packageName)
     fun refreshRuntimeEnvironment() = ExtractionController.refreshRuntimeEnvironment()
 
+    /** Global controls used by every screen. Only the engine that currently owns WhatsApp reacts. */
+    fun pauseActiveOperation() {
+        when {
+            publishState.value.running && !publishState.value.paused -> PublishController.pause()
+            scanState.value.running && !scanState.value.paused -> ScanController.pause()
+            engineState.value.status !in setOf(
+                com.althmany.extractor.data.EngineStatus.IDLE,
+                com.althmany.extractor.data.EngineStatus.PAUSED,
+                com.althmany.extractor.data.EngineStatus.COMPLETED,
+                com.althmany.extractor.data.EngineStatus.STOPPED,
+                com.althmany.extractor.data.EngineStatus.ERROR
+            ) -> ExtractionController.pause()
+        }
+    }
+
+    fun resumeActiveOperation() {
+        when {
+            publishState.value.paused -> PublishController.resume()
+            scanState.value.paused -> ScanController.resume()
+            engineState.value.status == com.althmany.extractor.data.EngineStatus.PAUSED -> ExtractionController.resume()
+        }
+    }
+
+    /** Emergency/global stop: cancels every engine and releases the single WhatsApp UI owner. */
+    fun stopAllOperations() {
+        ExtractionController.stop()
+        ScanController.stop()
+        PublishController.stop()
+        _message.value = "تم إيقاف جميع العمليات"
+    }
+
     fun setSelected(id: Long, selected: Boolean) {
         viewModelScope.launch {
             repo.setSelected(id, selected)
@@ -192,6 +224,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPublishSpeed(value: PublishSpeedProfile) = PublishController.setSpeed(value)
     fun setPublishMaxAttempts(value: Int) = PublishController.setMaxAttempts(value)
+    fun setPublishNavigationMode(value: PublishNavigationMode) = PublishController.setNavigationMode(value)
     fun setPublishDraft(value: String) = PublishController.setDraft(value)
     fun setPublishContentMode(value: PublishContentMode) = PublishController.setContentMode(value)
     fun setPublishAttachment(uri: String?, mime: String?) = PublishController.setAttachment(uri, mime)

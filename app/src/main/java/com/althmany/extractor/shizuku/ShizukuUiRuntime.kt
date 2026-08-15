@@ -69,6 +69,8 @@ internal class ShizukuUiRuntime(private val context: Context) {
         "Exit group", "Add members", "Add participants", "Invite via link", "Group permissions", "Group settings"
     )
     private val groupsFilterPatterns = listOf("المجموعات", "مجموعات", "Groups")
+    private val chatsTabPatterns = listOf("الدردشات", "دردشات", "Chats")
+    private val archivedPatterns = listOf("مؤرشفة", "المؤرشفة", "Archived")
     private val mediaPatterns = listOf("الوسائط والروابط والمستندات", "الوسائط، الروابط والمستندات", "Media, links, and docs", "Media, links and docs", "Media, links & docs")
     private val linksPatterns = listOf("الروابط", "روابط", "Links")
     private val olderPatterns = listOf("مشاهدة الرسائل الأقدم", "تحميل الرسائل الأقدم", "Load older messages", "View older messages", "Tap here to load older messages")
@@ -119,12 +121,13 @@ internal class ShizukuUiRuntime(private val context: Context) {
         if (!isWhatsApp(tree, packageName) || isGroupInfo(tree)) return false
         val minComposerTop = (tree.height * 0.52f).toInt()
         if (tree.nodes.any { it.editable && it.enabled && it.bounds.top >= minComposerTop }) return false
-        val bottomStart = (tree.height * 0.72f).toInt()
-        val navLabels = listOf("الدردشات", "Chats", "التحديثات", "Updates", "المجتمعات", "Communities", "المكالمات", "Calls")
+        val bottomStart = (tree.height * 0.70f).toInt()
+        val navLabels = listOf("الدردشات", "دردشات", "Chats", "التحديثات", "Updates", "المجتمعات", "Communities", "المكالمات", "Calls")
         val bottomNav = tree.nodes.any { n ->
             n.bounds.top >= bottomStart && navLabels.any { p -> n.label.equals(p, true) || n.label.contains(p, true) }
         }
-        return bottomNav || collectChatCandidates(tree, packageName).isNotEmpty()
+        val archived = tree.nodes.any { n -> archivedPatterns.any { p -> n.label.contains(p, true) } }
+        return bottomNav || archived || collectChatCandidates(tree, packageName).isNotEmpty()
     }
 
     fun toNodeSnapshot(tree: ShizukuUiTree): NodeSnapshot {
@@ -149,24 +152,66 @@ internal class ShizukuUiRuntime(private val context: Context) {
         return clickNode(tree, node, packageName)
     }
 
+    suspend fun clickChatsTab(tree: ShizukuUiTree, packageName: String): Boolean {
+        val minTop = (tree.height * 0.66f).toInt()
+        val node = tree.nodes.filter { it.bounds.top >= minTop && chatsTabPatterns.any { p -> it.label.contains(p, true) } }
+            .maxByOrNull { it.bounds.bottom } ?: return false
+        return clickNode(tree, node, packageName)
+    }
+
+    suspend fun openArchived(tree: ShizukuUiTree, packageName: String): Boolean {
+        val node = tree.nodes.filter { n -> archivedPatterns.any { p -> n.label.contains(p, true) } }
+            .minByOrNull { it.bounds.top } ?: return false
+        return clickNode(tree, node, packageName)
+    }
+
     fun collectChatCandidates(tree: ShizukuUiTree, packageName: String): Set<GroupSyncCandidate> {
         val out = linkedMapOf<String, GroupSyncCandidate>()
-        val minTop = (tree.height * 0.12f).toInt()
+        val minTop = (tree.height * 0.08f).toInt()
         val maxBottom = (tree.height * 0.94f).toInt()
-        tree.nodes.filter { it.clickable && it.enabled && it.packageName == packageName && it.bounds.height() in 44..430 && it.bounds.top >= minTop && it.bounds.bottom <= maxBottom }
-            .forEach { row ->
-                val labels = (listOf(row) + tree.descendants(row.index, 30)).flatMap { listOf(it.text, it.description) }.map(String::trim).filter(String::isNotBlank).distinct()
-                val title = labels.firstOrNull { looksLikeConversationTitle(it) } ?: return@forEach
-                val joined = labels.joinToString(" | ")
-                val unread = parseUnreadCount(joined)
-                val inactive = listOf("تمت إزالتك", "لم تعد مشارك", "غادرت المجموعة", "you were removed", "you left").any { joined.contains(it, true) }
-                val community = listOf("إعلان المجتمع", "community announcement").any { joined.contains(it, true) }
-                val activity = labels.drop(1).firstOrNull(::looksLikeActivityLabel)
-                val candidate = GroupSyncCandidate(title, unread, activity, !inactive, !inactive && !community, community, whatsappPackage = packageName)
-                val key = title.lowercase(Locale.ROOT)
-                val prev = out[key]
-                out[key] = if (prev == null) candidate else prev.copy(unreadCount=maxOf(prev.unreadCount,candidate.unreadCount), activityText=prev.activityText?:candidate.activityText, active=prev.active||candidate.active, publishableHint=prev.publishableHint||candidate.publishableHint, communityParentHint=prev.communityParentHint||candidate.communityParentHint)
+        val minWidth = (tree.width * 0.46f).toInt()
+        val usedRows = hashSetOf<Int>()
+
+        fun accept(row: ShizukuUiNode) {
+            if (!usedRows.add(row.index)) return
+            if (!row.enabled || row.packageName != packageName || row.bounds.top < minTop || row.bounds.bottom > maxBottom || row.bounds.height() !in 38..460 || row.bounds.width() < minWidth) return
+            val labels = (listOf(row) + tree.descendants(row.index, 36))
+                .flatMap { listOf(it.text, it.description) }.map(String::trim).filter(String::isNotBlank).distinct()
+            val title = labels.firstOrNull { looksLikeConversationTitle(it) } ?: return
+            val joined = labels.joinToString(" | ")
+            val unread = parseUnreadCount(joined)
+            val inactive = listOf("تمت إزالتك", "تمت ازالتك", "لم تعد مشارك", "غادرت المجموعة", "you were removed", "you left").any { joined.contains(it, true) }
+            val community = listOf("إعلان المجتمع", "community announcement").any { joined.contains(it, true) }
+            val activity = labels.drop(1).firstOrNull(::looksLikeActivityLabel)
+            val candidate = GroupSyncCandidate(title, unread, activity, !inactive, !inactive && !community, community, whatsappPackage = packageName)
+            val key = normalizeGroupName(title)
+            val prev = out[key]
+            out[key] = if (prev == null) candidate else prev.copy(
+                unreadCount = maxOf(prev.unreadCount, candidate.unreadCount),
+                activityText = prev.activityText ?: candidate.activityText,
+                active = prev.active || candidate.active,
+                publishableHint = prev.publishableHint || candidate.publishableHint,
+                communityParentHint = prev.communityParentHint || candidate.communityParentHint
+            )
+        }
+
+        // Start from title-like nodes and climb to the wide chat row. This survives UIAutomation
+        // dumps where the row itself is not marked clickable.
+        tree.nodes.asSequence()
+            .filter { it.packageName == packageName && it.bounds.top >= minTop && it.bounds.bottom <= maxBottom }
+            .filter { looksLikeConversationTitle(it.text.ifBlank { it.description }) }
+            .forEach { node ->
+                val row = tree.ancestors(node, 10)
+                    .filter { it.enabled && it.bounds.width() >= minWidth && it.bounds.height() in 38..460 }
+                    .sortedWith(compareByDescending<ShizukuUiNode> { it.clickable }.thenByDescending { it.bounds.width() })
+                    .firstOrNull() ?: node
+                accept(row)
             }
+
+        // Fallback for merged rows where title exists only on the parent description.
+        tree.nodes.asSequence()
+            .filter { it.packageName == packageName && it.enabled && it.bounds.width() >= minWidth && it.bounds.height() in 38..460 }
+            .forEach(::accept)
         return out.values.toSet()
     }
 
@@ -198,8 +243,8 @@ internal class ShizukuUiRuntime(private val context: Context) {
 
     suspend fun clickSend(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, listOf("إرسال", "Send"), preferBottom = true)
     suspend fun clickPositiveAction(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, listOf("إرسال", "Send", "التالي", "Next", "تم", "Done", "مشاركة", "Share"), preferBottom = true)
-    suspend fun clickInviteAction(tree: ShizukuUiTree, packageName: String, approval: Boolean): Boolean = clickPattern(tree, packageName, if (approval) listOf("طلب الانضمام", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "انضم إلى المجموعة", "Join group", "Join this group"), preferBottom = true)
-    fun inviteActionAvailable(tree: ShizukuUiTree, approval: Boolean): Boolean = findPattern(tree, if (approval) listOf("طلب الانضمام", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "انضم إلى المجموعة", "Join group", "Join this group")) != null
+    suspend fun clickInviteAction(tree: ShizukuUiTree, packageName: String, approval: Boolean): Boolean = clickPattern(tree, packageName, if (approval) listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community"), preferBottom = true)
+    fun inviteActionAvailable(tree: ShizukuUiTree, approval: Boolean): Boolean = findPattern(tree, if (approval) listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community")) != null
 
     suspend fun openMediaLinks(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, mediaPatterns, preferTop = false)
     suspend fun openLinksTab(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, linksPatterns, preferTop = true)
