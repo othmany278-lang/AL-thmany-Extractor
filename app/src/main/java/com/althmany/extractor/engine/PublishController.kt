@@ -949,6 +949,7 @@ object PublishController {
     }
 
     private fun publishAccessTiming(speed: PublishSpeedProfile): TimingPolicy = when (speed) {
+        PublishSpeedProfile.INSTANT -> ExtractionPolicy.timing(SpeedProfile.HYPER)
         PublishSpeedProfile.TURBO -> ExtractionPolicy.timing(SpeedProfile.HYPER)
         PublishSpeedProfile.FAST -> ExtractionPolicy.timing(SpeedProfile.ADAPTIVE)
         PublishSpeedProfile.ADAPTIVE -> ExtractionPolicy.timing(SpeedProfile.SMART)
