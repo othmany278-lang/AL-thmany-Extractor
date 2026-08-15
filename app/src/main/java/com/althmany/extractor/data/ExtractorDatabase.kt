@@ -1229,7 +1229,15 @@ class ExtractorDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         val total = counts.values.sum()
         val sent = counts[PublishStatus.SENT.name] ?: 0
         val verified = counts[PublishStatus.VERIFIED.name] ?: 0
-        val failed = counts[PublishStatus.FAILED.name] ?: 0
+        val failed = listOf(
+            PublishStatus.FAILED,
+            PublishStatus.READ_ONLY,
+            PublishStatus.GROUP_NOT_FOUND,
+            PublishStatus.LEFT,
+            PublishStatus.BLOCKED,
+            PublishStatus.UI_ERROR,
+            PublishStatus.TIMEOUT
+        ).sumOf { counts[it.name] ?: 0 }
         val skipped = counts[PublishStatus.SKIPPED.name] ?: 0
         val uncertain = counts[PublishStatus.UNCERTAIN.name] ?: 0
         val pending = (total - sent - verified - failed - skipped - uncertain).coerceAtLeast(0)

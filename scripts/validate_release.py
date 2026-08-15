@@ -73,14 +73,16 @@ shizuku_service = read('app/src/main/java/com/althmany/extractor/shizuku/Shizuku
 shizuku_uia = read('app/src/main/java/com/althmany/extractor/shizuku/PersistentUiAutomationBridge.kt')
 shizuku_runtime = read('app/src/main/java/com/althmany/extractor/shizuku/ShizukuUiRuntime.kt')
 access_xml = read('app/src/main/res/xml/accessibility_service_config.xml')
+smart_ui = read('app/src/main/java/com/althmany/extractor/ui/SmartWorkspaceScreens.kt')
+view_model = read('app/src/main/java/com/althmany/extractor/ui/AppViewModel.kt')
 
 checks = {
     'AGP 8.13.2': 'version "8.13.2"' in root_build,
     'Kotlin 2.3.21': root_build.count('version "2.3.21"') >= 2,
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
-    'versionCode 2170': 'versionCode = 2170' in app_build,
-    'versionName 2.17.0': 'versionName = "2.17.0"' in app_build,
+    'versionCode 2200': 'versionCode = 2200' in app_build,
+    'versionName 2.20.0': 'versionName = "2.20.0"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -102,7 +104,7 @@ checks = {
     'Stale sync generation guard': all(x in db for x in ['sync_generation', 'stale', 'finalizeGroupSync', 'selected=0, stale=1']),
     'Old discovered garbage hidden on v11 migration': 'UPDATE target_groups SET selected=0, stale=1 WHERE discovered=1' in db,
     'Group-only WhatsApp filter sync': all(x in extract for x in ['activateGroupsOnlyFilter', 'verifiedGroupHint = true', 'فلتر المجموعات']),
-    'Safe empty-sync preservation': 'تم الحفاظ على قاعدة القروبات القديمة بدون تعديل' in extract,
+    'Safe empty-sync preservation': 'تم الحفاظ على قاعدة القروبات القديمة' in extract,
     'System UI labels excluded from group names': all(x in adapter for x in ['جهات اتصالك غير متزامنة', 'المجموعات', 'اسأل meta ai أو ابحث']),
     'Chat-list container scoped scanning': 'findChatListContainer' in adapter and 'collectChatListCandidatesDetailed' in adapter,
 
@@ -115,7 +117,7 @@ checks = {
     'Search remains router-only fallback': 'SEARCH_FALLBACK("Search كحل أخير")' in models and 'allowSearchFallback' in router,
     'Extraction never types group names': 'allowSearchFallback = false' in extract and 'بدون Search' in extract,
     'Structural chat confirmation': 'isConversationOpenForTarget' in adapter and 'isConversationOpenForTarget' in extract,
-    'Conversation-list bottom-nav recovery': 'bottomNavLabels' in adapter and 'prevent' in adapter,
+    'Conversation-list bottom-nav recovery': 'bottomNavLabels' in adapter and 'activateChatsTab' in adapter and 'recoverChatsSurface' in extract,
     'Shizuku normalized group matching': 'normalizeGroupName' in shizuku_runtime and 'groupNamesEquivalent' in shizuku_runtime,
     'No fake Android JID direct route': 'does not expose an official stable JID-to-chat intent' in router and 'GroupAccessMethod.JID_DIRECT' in router,
     'Access success memory': 'recordGroupAccessSuccess' in repo and 'updateGroupAccessSuccess' in db,
@@ -170,8 +172,17 @@ checks = {
     'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
     'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
     'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
-    'Workflow artifact v2.17.0': 'ExactDashboard-RootFix-2.17.0' in workflow,
-    'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
+    'Workflow artifact v2.20.0': 'FinalRuntimeFix-2.20.0' in workflow,
+        'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
+    'Runtime sync row discovery': all(x in adapter for x in ['collectChatListCandidatesDetailedInternal', 'nearestClickable', 'activateChatsTab']) and 'scanConversationList' in extract,
+    'Archived group synchronization': 'sync-archived-groups' in extract and 'openArchived' in shizuku_runtime,
+    'Smart workspace bottom nav': 'WorkspaceBottomBar' in main and 'WorkspaceGlobalMiniBar' in main and 'NavigationBar' in smart_ui,
+    'Persistent global controls': all(x in smart_ui for x in ['بدء', 'إيقاف مؤقت', 'استئناف', 'إيقاف الكل']) and all(x in view_model for x in ['pauseActiveOperation', 'resumeActiveOperation', 'stopAllOperations']),
+    'Global stop cancels synchronization': 'syncCancelRequested = true' in extract and 'تم إيقاف المزامنة' in extract,
+    'Global pause/resume synchronization': 'syncPauseRequested' in extract and 'مزامنة القروبات متوقفة مؤقتًا' in extract,
+    'Reference-style workspace screens': all(x in smart_ui for x in ['Smart WhatsApp Workspace', 'Extractor', 'Publish', 'Scan', 'Shared Settings', 'WorkspaceHomeScreen', 'WorkspaceExtractionScreen', 'WorkspaceScanScreen', 'WorkspacePublishScreen', 'WorkspaceSettingsScreen']),
+    'Scan-and-join UI wiring': 'ScanActionMode.SCAN_AND_JOIN' in main and 'setScanRequestToJoinEnabled(true)' in main,
+    'Publisher navigation modes': all(x in read('app/src/main/java/com/althmany/extractor/engine/PublishUiState.kt') for x in ['AUTO', 'FAST_VISIBLE', 'SEMI_HIDDEN']) and 'allowSearchFallback = _state.value.navigationMode.allowSearchFallback' in publish,
     'Hybrid backend UI start gating': screens.count('runtimeReady &&') >= 3 and 'engine.shizukuReady' in screens,
 }
 
@@ -193,4 +204,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.17.0 Exact Dashboard + Root Fix source contract: PASS')
+print('\nAL-thmany Extractor 2.20.0 Final Runtime Fix source contract: PASS')

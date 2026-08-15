@@ -17,6 +17,12 @@ enum class PublishStatus(val labelAr: String) {
     SENT("تم الإرسال"),
     VERIFIED("تم التحقق"),
     UNCERTAIN("غير محسوم — لن يُعاد تلقائيًا"),
+    READ_ONLY("للقراءة فقط"),
+    GROUP_NOT_FOUND("القروب غير موجود"),
+    LEFT("تمت المغادرة/الإزالة"),
+    BLOCKED("محظور/غير مسموح"),
+    UI_ERROR("خطأ واجهة"),
+    TIMEOUT("انتهت المهلة"),
     FAILED("فشل"),
     SKIPPED("تم التخطي")
 }

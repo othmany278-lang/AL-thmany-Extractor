@@ -1,0 +1,15 @@
+SOURCE_CHECKSUMS_2.20.sha256
+VALIDATION_2.20_FULL.txt
+CHANGELOG_2.20_AR.md
+APPLY_UPDATE_2.20_AR.md
+TEST_REPORT_2.20_AR.txt
+scripts/validate_release.py
+scripts/PurePublishChecks.kt
+app/build.gradle.kts
+app/src/main/java/com/althmany/extractor/engine/ExtractionController.kt
+app/src/main/java/com/althmany/extractor/engine/PublishController.kt
+app/src/main/java/com/althmany/extractor/engine/PublishUiState.kt
+app/src/main/java/com/althmany/extractor/engine/WhatsAppUiAdapter.kt
+app/src/main/java/com/althmany/extractor/data/PublishModels.kt
+app/src/main/java/com/althmany/extractor/data/ExtractorDatabase.kt
+.github/workflows/build-apk.yml

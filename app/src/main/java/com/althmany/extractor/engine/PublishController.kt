@@ -36,10 +36,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /**
- * Sequential publishing engine for user-selected WhatsApp groups.
+ * Sequential publishing engine backed by the synchronized GroupRecord database.
  *
  * Safety/reliability rules:
- * - never publishes to an unselected target group;
+ * - explicit group selections take precedence; without them, active synchronized publishable groups are used;
  * - group identity is verified as a group before typing;
  * - the message is entered first, then the send action is explicit;
  * - after a send click, an ambiguous result is never blindly retried (prevents duplicate posts);
@@ -72,6 +72,7 @@ object PublishController {
         _state.value = _state.value.copy(
             speed = settings.speed(),
             maxAttempts = settings.maxAttempts(),
+            navigationMode = settings.navigationMode(),
             messageText = settings.lastMessage(),
             contentMode = settings.contentMode(),
             attachmentUri = settings.attachmentUri(),
@@ -132,14 +133,18 @@ object PublishController {
             opened = ShizukuBridge.launchPackage(appContext, packageName)
         }
         if (!opened) return false
-        recoverLiveService()?.let { shizukuMode = false; return true }
-        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 1_200L)
+        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 3_000L)
         while (SystemClock.elapsedRealtime() < accessDeadline) {
-            delay(75L)
-            recoverLiveService()?.let { shizukuMode = false; return true }
+            val live = recoverLiveService()
+            if (live != null && adapter.isWhatsAppRoot(live.currentRoot(), packageName)) {
+                shizukuMode = false
+                return true
+            }
+            withTimeoutOrNull(180L) { uiEvents.first() }
+            delay(20L)
         }
         if (ShizukuBridge.status().ready && ShizukuBridge.ensureBound(appContext)) {
-            val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 1_200L).coerceAtLeast(1_500L)
+            val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 3_000L).coerceAtLeast(1_500L)
             while (SystemClock.elapsedRealtime() < deadline) {
                 val tree = shizukuUi.snapshot(packageName)
                 if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName)) { shizukuMode = true; return true }
@@ -163,6 +168,12 @@ object PublishController {
         val safe = value.coerceIn(1, 3)
         settings.setMaxAttempts(safe)
         _state.value = _state.value.copy(maxAttempts = safe)
+    }
+
+    fun setNavigationMode(value: PublishNavigationMode) {
+        if (isRunning()) return
+        settings.setNavigationMode(value)
+        _state.value = _state.value.copy(navigationMode = value)
     }
 
     fun setDraft(message: String) {
@@ -220,13 +231,24 @@ object PublishController {
                 _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "فشل Preflight: واتساب/Accessibility غير جاهز في نفس البيئة")
                 return@launch
             }
-            val groups = repository.selectedGroups().filter {
+            val selectedGroups = repository.selectedGroups().filter {
                 it.active && it.publishable && !it.communityParent &&
                     (it.whatsappPackage.isBlank() || it.whatsappPackage == packageName)
             }
+            val groups = selectedGroups.ifEmpty {
+                // PipelineFix: no manual selection means use the synchronized publishable set.
+                // Explicit selections still take precedence whenever they exist.
+                repository.groups().filter {
+                    it.active && it.publishable && !it.communityParent &&
+                        (it.whatsappPackage.isBlank() || it.whatsappPackage == packageName)
+                }
+            }
             if (groups.isEmpty()) {
-                _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "لا توجد قروبات محددة وقابلة للنشر")
+                _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "لا توجد قروبات مزامنة قابلة للنشر")
                 return@launch
+            }
+            if (selectedGroups.isEmpty()) {
+                _state.value = _state.value.copy(info = "لا يوجد تحديد يدوي — سيتم استخدام ${groups.size} قروب مزامن قابل للنشر")
             }
             val speed = settings.speed()
             val attempts = settings.maxAttempts()
@@ -360,7 +382,7 @@ object PublishController {
                     repository.updateGroupPublishState(
                         group.id,
                         result.status,
-                        if (result.status == PublishStatus.FAILED || result.status == PublishStatus.UNCERTAIN) result.detail else null
+                        if (result.status !in setOf(PublishStatus.SENT, PublishStatus.VERIFIED, PublishStatus.SKIPPED)) result.detail else null
                     )
                 }
                 refreshStats(runId)
@@ -467,26 +489,31 @@ object PublishController {
                     delay(500L + attempt * 300L)
                     continue
                 }
-                return PublishDecision(PublishStatus.FAILED, "تعذر فتح القروب أو التحقق من أنه مجموعة")
+                return PublishDecision(PublishStatus.GROUP_NOT_FOUND, "تعذر فتح القروب أو التحقق من أنه مجموعة")
             }
 
             val root = service?.currentRoot()
+            adapter.classifyPublishBlocker(root)?.let { blocker ->
+                return PublishDecision(blocker, blocker.labelAr)
+            }
             _state.value = _state.value.copy(status = PublishEngineStatus.WRITING, info = "تحضير المحتوى")
             repository.updatePublishItem(item.id, PublishStatus.PREPARING, "تحضير المحتوى")
             if (!adapter.setMessageComposerText(root, message)) {
                 if (attempt < run.maxAttempts) { delay(350); continue }
-                return PublishDecision(PublishStatus.FAILED, "لم يتم العثور على حقل كتابة الرسالة")
+                val blocker = adapter.classifyPublishBlocker(service?.currentRoot())
+                return PublishDecision(blocker ?: PublishStatus.UI_ERROR, blocker?.labelAr ?: "لم يتم العثور على حقل كتابة الرسالة")
             }
             if (!waitUntil(2_600L) { adapter.messageComposerContains(service?.currentRoot(), message) }) {
                 if (attempt < run.maxAttempts) continue
-                return PublishDecision(PublishStatus.FAILED, "لم يتم تثبيت النص في حقل الكتابة")
+                return PublishDecision(PublishStatus.TIMEOUT, "انتهت مهلة تثبيت النص في حقل الكتابة")
             }
 
             _state.value = _state.value.copy(status = PublishEngineStatus.SENDING, info = "إرسال الرسالة")
             repository.updatePublishItem(item.id, PublishStatus.SENDING, "تم تجهيز النص وجارٍ الإرسال")
             if (!adapter.clickSendButton(service?.currentRoot())) {
                 if (attempt < run.maxAttempts) { delay(420); continue }
-                return PublishDecision(PublishStatus.FAILED, "تعذر الضغط على زر الإرسال")
+                val blocker = adapter.classifyPublishBlocker(service?.currentRoot())
+                return PublishDecision(blocker ?: PublishStatus.UI_ERROR, blocker?.labelAr ?: "تعذر الضغط على زر الإرسال")
             }
 
             _state.value = _state.value.copy(status = PublishEngineStatus.VERIFYING, info = "التحقق من الإرسال")
@@ -548,11 +575,16 @@ object PublishController {
             root = svc.currentRoot()
         }
 
-        // Recipient picker: search exact selected group and never choose a different visible target.
-        if (adapter.findAndClickSearch(root)) { awaitEventOrDelay(180); root = svc.currentRoot() }
-        if (!adapter.setSearchText(root, item.groupName)) return PublishDecision(PublishStatus.FAILED, "تعذر البحث عن القروب داخل شاشة المشاركة")
-        awaitEventOrDelay(250)
-        if (!adapter.openSearchResult(svc.currentRoot(), item.groupName)) return PublishDecision(PublishStatus.FAILED, "تعذر تحديد القروب في شاشة المشاركة")
+        // Recipient picker: Semi-Hidden must never type the group name. First try exact visible-row
+        // matching and bounded scrolling. Search is used only when the selected navigation mode allows it.
+        val recipientSelected = selectShareRecipientAccessibility(
+            groupName = item.groupName,
+            allowSearch = _state.value.navigationMode.allowSearchFallback,
+            maxScrollPasses = _state.value.navigationMode.maxScrollPasses.coerceAtMost(220)
+        )
+        if (!recipientSelected) {
+            return PublishDecision(PublishStatus.GROUP_NOT_FOUND, "تعذر تحديد القروب في شاشة المشاركة بالطريقة المسموحة")
+        }
         awaitEventOrDelay(220)
 
         _state.value = _state.value.copy(status = PublishEngineStatus.SENDING, info = "تأكيد مشاركة المرفق")
@@ -605,6 +637,64 @@ object PublishController {
         return PublishDecision(PublishStatus.SENT, "تم تنفيذ مشاركة المرفق ووصل التطبيق إلى القروب المحدد", false)
     }
 
+
+    private suspend fun selectShareRecipientAccessibility(
+        groupName: String,
+        allowSearch: Boolean,
+        maxScrollPasses: Int
+    ): Boolean {
+        val svc = service ?: return false
+        var stable = 0
+        var lastSignature: Int? = null
+        repeat(maxScrollPasses.coerceIn(1, 220)) {
+            val root = svc.currentRoot() ?: return@repeat
+            val row = adapter.findVisibleChatListRow(root, groupName)
+            if (row != null) {
+                val clicked = row.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) ||
+                    svc.tapBounds(android.graphics.Rect().also(row::getBoundsInScreen), _state.value.speed.settleMs.coerceAtLeast(18L))
+                if (clicked) return true
+            }
+            val before = adapter.snapshot(root).signature
+            val moved = adapter.scrollChatListForward(root) || svc.swipeChatListForward(_state.value.speed.settleMs.coerceAtLeast(18L))
+            awaitEventOrDelay(70L)
+            val after = adapter.snapshot(svc.currentRoot()).signature
+            stable = if (!moved || after == before || after == lastSignature) stable + 1 else 0
+            lastSignature = after
+            if (stable >= 3) return@repeat
+        }
+        if (!allowSearch) return false
+        var root = svc.currentRoot()
+        if (adapter.findAndClickSearch(root)) { awaitEventOrDelay(160L); root = svc.currentRoot() }
+        if (!adapter.setSearchText(root, groupName)) return false
+        awaitEventOrDelay(230L)
+        return adapter.openSearchResult(svc.currentRoot(), groupName)
+    }
+
+    private suspend fun selectShareRecipientShizuku(
+        packageName: String,
+        groupName: String,
+        allowSearch: Boolean,
+        maxScrollPasses: Int
+    ): Boolean {
+        var stable = 0
+        var tree = awaitShizukuTree(packageName, 1_200L) ?: return false
+        repeat(maxScrollPasses.coerceIn(1, 220)) {
+            if (shizukuUi.openVisibleChat(tree, groupName, packageName)) return true
+            val before = tree.signature
+            shizukuUi.swipeListForward(tree, 78)
+            delay(70L)
+            tree = awaitShizukuTree(packageName, 650L) ?: return@repeat
+            stable = if (tree.signature == before) stable + 1 else 0
+            if (stable >= 3) return@repeat
+        }
+        if (!allowSearch) return false
+        if (!shizukuUi.clickSearch(tree, packageName)) return false
+        delay(150L)
+        if (!shizukuUi.setSearchText(packageName, groupName)) return false
+        delay(230L)
+        tree = awaitShizukuTree(packageName, 750L) ?: return false
+        return shizukuUi.openVisibleChat(tree, groupName, packageName)
+    }
 
     private suspend fun awaitShizukuTree(packageName: String, timeoutMs: Long = 3_500L): ShizukuUiTree? {
         if (!ShizukuBridge.status().ready || !ShizukuBridge.ensureBound(appContext)) return null
@@ -668,6 +758,10 @@ object PublishController {
             shizukuUi.swipeListBackward(tree, 78); delay(65L)
         }
 
+        if (!_state.value.navigationMode.allowSearchFallback) {
+            repository.recordGroupAccessFailure(group.id, GroupAccessMethod.SCROLL_MATCH)
+            return false
+        }
         tree = awaitShizukuTree(packageName, 800L) ?: return false
         if (shizukuUi.clickSearch(tree, packageName)) {
             delay(160L)
@@ -785,11 +879,14 @@ object PublishController {
             }); true
         }.getOrDefault(false)
         if (!launched) return PublishDecision(PublishStatus.FAILED, "Shizuku: تعذر فتح مشاركة واتساب")
-        var tree = awaitShizukuTree(run.targetPackage, 3_500L) ?: return PublishDecision(PublishStatus.FAILED, "Shizuku لا يرى شاشة المشاركة")
-        if (shizukuUi.clickSearch(tree, run.targetPackage)) { delay(160L); tree = awaitShizukuTree(run.targetPackage, 700L) ?: tree }
-        if (!shizukuUi.setSearchText(run.targetPackage, item.groupName)) return PublishDecision(PublishStatus.FAILED, "Shizuku: تعذر كتابة اسم القروب في Share Picker")
-        delay(240L); tree = awaitShizukuTree(run.targetPackage, 800L) ?: tree
-        if (!shizukuUi.openVisibleChat(tree, item.groupName, run.targetPackage)) return PublishDecision(PublishStatus.FAILED, "Shizuku: تعذر تحديد القروب في Share Picker")
+        var tree = awaitShizukuTree(run.targetPackage, 3_500L) ?: return PublishDecision(PublishStatus.UI_ERROR, "Shizuku لا يرى شاشة المشاركة")
+        val recipientSelected = selectShareRecipientShizuku(
+            packageName = run.targetPackage,
+            groupName = item.groupName,
+            allowSearch = _state.value.navigationMode.allowSearchFallback,
+            maxScrollPasses = _state.value.navigationMode.maxScrollPasses.coerceAtMost(220)
+        )
+        if (!recipientSelected) return PublishDecision(PublishStatus.GROUP_NOT_FOUND, "Shizuku: تعذر تحديد القروب في Share Picker بالطريقة المسموحة")
         delay(220L); tree = awaitShizukuTree(run.targetPackage, 900L) ?: tree
         if (!shizukuUi.clickPositiveAction(tree, run.targetPackage)) return PublishDecision(PublishStatus.FAILED, "Shizuku: لم يظهر زر المتابعة/الإرسال")
         delay(300L); tree = awaitShizukuTree(run.targetPackage, 1_200L) ?: tree
@@ -826,8 +923,8 @@ object PublishController {
             timing = timing,
             waitForUi = { ms -> awaitEventOrDelay(ms.coerceAtMost(timeoutMs)) },
             ensureForeground = { openTargetWhatsApp(packageName) },
-            maxScrollPasses = 300,
-            allowSearchFallback = true
+            maxScrollPasses = _state.value.navigationMode.maxScrollPasses,
+            allowSearchFallback = _state.value.navigationMode.allowSearchFallback
         )
         if (!access.opened) {
             access.attempted.lastOrNull()?.let { repository.recordGroupAccessFailure(group.id, it) }

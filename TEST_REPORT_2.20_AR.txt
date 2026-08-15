@@ -1,0 +1,18 @@
+AL-thmany Extractor v2.20.0 — Final Runtime Fix
+
+تم تنفيذ:
+- validate_release.py: PASS
+- Pure Engine/Profile checks: PASS
+- Pure Scan checks: PASS
+- Pure Publish checks: PASS
+- Pure Runtime checks: PASS
+- Pure Profile checks: PASS
+
+الإصلاحات الأساسية:
+1) مزامنة Groups لا تعتبر القائمة مؤكدة إلا عند إثبات أن فلتر Groups نشط؛ وإلا تستخدم Group Info verification.
+2) حذف Search القديم من مسار الاستخراج؛ الاستخراج يستخدم GroupRecord + Visible List + Scroll Match فقط.
+3) إضافة PublishSpeedProfile.INSTANT = 0ms بين القروبات (لا يلغي انتظار واجهة واتساب أو التحقق من النتيجة).
+4) Semi-Hidden للمرفقات يحاول اختيار القروب من Share Picker بالاسم الظاهر + Scroll بدون كتابة الاسم؛ Search فقط في الأوضاع التي تسمح به.
+5) حالات نشر تفصيلية: READ_ONLY / GROUP_NOT_FOUND / LEFT / BLOCKED / UI_ERROR / TIMEOUT.
+
+تنبيه: اختبارات المصدر لا تعوض اختبار APK على هاتف حقيقي مع إصدار واتساب الفعلي.

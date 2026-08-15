@@ -5,8 +5,15 @@ import com.althmany.extractor.data.PublishStats
 
 enum class PublishEngineStatus { IDLE, PREPARING, OPENING_GROUP, WRITING, SENDING, VERIFYING, RETRYING, PAUSED, COMPLETED, STOPPED, ERROR }
 
+enum class PublishNavigationMode(val labelAr: String, val allowSearchFallback: Boolean, val maxScrollPasses: Int) {
+    AUTO("Auto • تلقائي", true, 300),
+    FAST_VISIBLE("Fast Visible", true, 80),
+    SEMI_HIDDEN("أقل ظهورًا • بدون Search", false, 300)
+}
+
 enum class PublishSpeedProfile(val labelAr: String, val betweenGroupsMs: Long, val uiTimeoutMs: Long, val settleMs: Long) {
     // The displayed interval is the real minimum pacing used by the engine.
+    INSTANT("فوري • 0ms", 0L, 5_000L, 18L),
     TURBO("Turbo • 1.0s", 1_000L, 5_000L, 32L),
     FAST("سريع • 1.8s", 1_800L, 5_000L, 40L),
     ADAPTIVE("ذكي • 3.0s", 3_000L, 7_000L, 70L),
@@ -24,6 +31,7 @@ data class PublishUiState(
     val currentAttempt: Int = 0,
     val speed: PublishSpeedProfile = PublishSpeedProfile.ADAPTIVE,
     val maxAttempts: Int = 2,
+    val navigationMode: PublishNavigationMode = PublishNavigationMode.AUTO,
     val messageText: String = "",
     val contentMode: PublishContentMode = PublishContentMode.SINGLE_TEXT,
     val attachmentUri: String? = null,

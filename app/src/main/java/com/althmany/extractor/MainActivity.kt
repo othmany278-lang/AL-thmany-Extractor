@@ -156,6 +156,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                             if (target == AppScreen.RESULTS) viewModel.reloadLinks()
                             if (target == AppScreen.GROUPS) viewModel.refresh()
                             if (target == AppScreen.PUBLISH) viewModel.reloadPublishItems()
+                            if (target == AppScreen.SCAN) viewModel.importScanLinksFromExtraction()
                             if (target == AppScreen.LOGS) viewModel.reloadLogs()
                         },
                         onSettings = { showSettings = true },
@@ -187,7 +188,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                                     onAutoJoin = {
                                         viewModel.setScanActionMode(ScanActionMode.SCAN_AND_JOIN)
                                         viewModel.setScanRequestToJoinEnabled(true)
-                                        viewModel.reloadScanItems()
+                                        viewModel.importScanLinksFromExtraction()
                                         screen = AppScreen.SCAN
                                     },
                                     onPublish = { viewModel.reloadPublishItems(); screen = AppScreen.PUBLISH },

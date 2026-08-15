@@ -63,6 +63,8 @@ object ExtractionController {
     private val shizukuUi: ShizukuUiRuntime by lazy { ShizukuUiRuntime(appContext) }
     private var service: WhatsAppAccessibilityService? = null
     private var runJob: Job? = null
+    @Volatile private var syncCancelRequested: Boolean = false
+    @Volatile private var syncPauseRequested: Boolean = false
     private var allowIncompleteCheckpointResume: Boolean = false
 
     private val _state = MutableStateFlow(ExtractionUiState())
@@ -232,6 +234,12 @@ object ExtractionController {
     }
 
     fun pause() {
+        if (_state.value.status == EngineStatus.SYNCING_GROUPS || syncPauseRequested) {
+            syncPauseRequested = true
+            _state.value = _state.value.copy(status = EngineStatus.PAUSED, message = "مزامنة القروبات متوقفة مؤقتًا")
+            notifier.show(_state.value)
+            return
+        }
         stateStore.paused = true
         _state.value = _state.value.copy(status = EngineStatus.PAUSED, message = "متوقف مؤقتًا — حفظ نقطة الاستكمال")
         notifier.show(_state.value)
@@ -258,6 +266,12 @@ object ExtractionController {
     }
 
     fun resume() {
+        if (syncPauseRequested) {
+            syncPauseRequested = false
+            _state.value = _state.value.copy(status = EngineStatus.SYNCING_GROUPS, message = "استئناف مزامنة القروبات")
+            notifier.show(_state.value)
+            return
+        }
         recoverLiveService()
         stateStore.active = true
         stateStore.paused = false
@@ -280,6 +294,8 @@ object ExtractionController {
     }
 
     fun stop() {
+        syncCancelRequested = true
+        syncPauseRequested = false
         stateStore.active = false
         stateStore.paused = false
         runJob?.cancel()
@@ -327,6 +343,46 @@ object ExtractionController {
         return recoverLiveService()
     }
 
+    /** Event-first wait for the selected WhatsApp window, with a real launch timeout instead of a 150ms guess. */
+    private suspend fun awaitWhatsAppRoot(
+        svc: WhatsAppAccessibilityService,
+        expectedPackage: String,
+        timeoutMs: Long = 5_000L
+    ): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (adapter.isWhatsAppRoot(svc.currentRoot(), expectedPackage)) return true
+            withTimeoutOrNull(220L) { uiEvents.first() }
+            delay(20L)
+        }
+        return adapter.isWhatsAppRoot(svc.currentRoot(), expectedPackage)
+    }
+
+    /** Return to WhatsApp Chats without blindly backing out of the app. */
+    private suspend fun recoverChatsSurface(
+        svc: WhatsAppAccessibilityService,
+        timing: TimingPolicy,
+        expectedPackage: String
+    ): Boolean {
+        repeat(8) { pass ->
+            val root = svc.currentRoot()
+            if (!adapter.isWhatsAppRoot(root, expectedPackage)) {
+                if (!openWhatsApp()) return false
+                awaitWhatsAppRoot(svc, expectedPackage, 2_500L)
+            }
+            if (adapter.isConversationListVisible(svc.currentRoot())) return true
+            if (adapter.activateChatsTab(svc.currentRoot())) {
+                awaitUiChange(maxOf(timing.searchOpenMs, 140L))
+                if (adapter.isConversationListVisible(svc.currentRoot())) return true
+            }
+            if (pass < 6) {
+                svc.performBack()
+                awaitUiChange(maxOf(timing.searchOpenMs, 140L))
+            }
+        }
+        return adapter.isConversationListVisible(svc.currentRoot())
+    }
+
     fun refreshStats() {
         if (!::repository.isInitialized) return
         scope.launch { _state.value = _state.value.copy(stats = repository.stats()) }
@@ -338,6 +394,8 @@ object ExtractionController {
      * discoveries start unselected, and group identity is trusted only when the Groups filter applied.
      */
     suspend fun syncGroupsNow(): Int {
+        syncCancelRequested = false
+        syncPauseRequested = false
         if (ScanController.isRunning() || PublishController.isRunning()) {
             throw IllegalStateException("أوقف الفحص أو النشر قبل مزامنة القروبات")
         }
@@ -351,58 +409,70 @@ object ExtractionController {
         val timing = ExtractionPolicy.timing(prefs.speed)
         _state.value = _state.value.copy(status = EngineStatus.SYNCING_GROUPS, message = "مزامنة القروبات من واتساب", syncFound = 0)
         if (!openWhatsApp()) throw IllegalStateException("تعذر فتح واتساب المحدد داخل البيئة الحالية")
-        val svc = awaitRuntimeService(1_200L)
+        val svc = awaitRuntimeService(1_800L)
         if (svc == null) {
             if (ShizukuBridge.status().ready) {
                 return syncGroupsViaShizuku(timing)
             }
             throw IllegalStateException("تم فتح واتساب لكن لا Accessibility محلية ولا Shizuku جاهز داخل نفس البيئة")
         }
-        awaitUiChange(timing.groupOpenMs)
-
-        // Recover from a chat/info/search screen to the main list without assuming a specific WhatsApp layout.
-        for (attempt in 0 until 4) {
-            val root = svc.currentRoot()
-            if (adapter.isConversationListVisible(root)) break
-            svc.performBack()
-            awaitUiChange(timing.searchOpenMs)
+        val syncPackage = requireSelectedPackage()
+        if (!awaitWhatsAppRoot(svc, syncPackage, 5_000L)) {
+            if (ShizukuBridge.status().ready) return syncGroupsViaShizuku(timing)
+            throw IllegalStateException("Accessibility متصلة لكن rootInActiveWindow لم يرَ واتساب المحدد خلال مهلة التشغيل")
         }
-        if (!adapter.isConversationListVisible(svc.currentRoot())) {
-            throw IllegalStateException("تعذر الوصول إلى قائمة الدردشات الرئيسية في واتساب")
+        if (!recoverChatsSurface(svc, timing, syncPackage)) {
+            throw IllegalStateException("تعذر الوصول إلى تبويب الدردشات في واتساب؛ افتح واتساب مرة واحدة وتأكد أن Accessibility ترى الشاشة")
         }
 
-        // The reference videos show the real WhatsApp Groups chip. Use it as the authoritative
-        // group boundary instead of guessing group-vs-private from arbitrary clickable labels.
+        // Prefer WhatsApp's real Groups chip. If a build/profile does not expose that chip through
+        // Accessibility, fall back to opening visible chat rows and proving Group Info before saving.
+        // The fallback is slower but safe: private chats are never persisted merely because they are visible.
         val groupsFilterApplied = activateGroupsOnlyFilter(svc, timing)
-        if (!groupsFilterApplied) {
-            throw IllegalStateException("لم يظهر فلتر المجموعات في واتساب؛ أوقفت المزامنة الآمنة بدل حفظ محادثات خاصة كقروبات")
-        }
-
         val found = linkedMapOf<String, GroupSyncCandidate>()
         val initialVisibleNames = adapter.collectChatListCandidates(svc.currentRoot()).take(8).toSet()
 
-        // Scan the group-filtered main list first. Archived is optional; only scan it when WhatsApp
-        // exposes the same Groups filter there, otherwise skip it rather than polluting GroupRecord.
-        scanConversationList(svc, timing, found)
+        if (groupsFilterApplied) {
+            scanConversationList(svc, timing, found)
+        } else {
+            repository.log(null, "WARN", "sync-groups-filter-fallback", "فلتر المجموعات غير مكشوف؛ بدء تحقق صف-بصف عبر Group Info بدون Search")
+            scanAndVerifyConversationList(svc, timing, found, "الدردشات")
+        }
         restoreConversationListPosition(svc, timing, initialVisibleNames)
-        if (adapter.openArchived(svc.currentRoot())) {
-            awaitUiChange(timing.groupOpenMs)
+        // Archived normally lives near the top. Search upward with fresh roots instead of assuming
+        // the list was restored to exactly the same pixel position.
+        var archivedOpened = adapter.openArchived(svc.currentRoot())
+        var archivePass = 0
+        while (!archivedOpened && archivePass++ < 14) {
+            if (syncCancelRequested) throw CancellationException("تم إيقاف المزامنة")
+            val root = svc.currentRoot() ?: break
+            val moved = adapter.scrollChatListBackward(root) || svc.swipeChatListBackward(timing.gestureDurationMs)
+            awaitBurstWithoutSaving(timing)
+            archivedOpened = adapter.openArchived(svc.currentRoot())
+            if (!moved && !archivedOpened) break
+        }
+        if (archivedOpened) {
+            awaitUiChange(maxOf(timing.groupOpenMs, 180L))
             if (activateGroupsOnlyFilter(svc, timing)) {
                 repository.log(null, "INFO", "sync-archived-groups", "فحص القروبات المؤرشفة عبر فلتر المجموعات")
                 scanConversationList(svc, timing, found)
             } else {
-                repository.log(null, "INFO", "sync-archived-skip", "تم تخطي المؤرشفة لأن فلتر المجموعات غير متاح هناك")
+                repository.log(null, "WARN", "sync-archived-verify-fallback", "المؤرشفة بدون فلتر Groups مكشوف؛ تحقق صف-بصف عبر Group Info")
+                scanAndVerifyConversationList(svc, timing, found, "المؤرشفة")
             }
             svc.performBack()
-            awaitUiChange(timing.searchOpenMs)
+            awaitUiChange(maxOf(timing.searchOpenMs, 150L))
+            recoverChatsSurface(svc, timing, syncPackage)
             activateGroupsOnlyFilter(svc, timing)
+        } else {
+            repository.log(null, "INFO", "sync-archived-none", "لم يظهر قسم المؤرشفة في هذه النسخة/الحساب")
         }
 
         if (found.isEmpty()) {
-            throw IllegalStateException("فلتر المجموعات فُتح لكن لم أستطع قراءة أي صف قروب؛ تم الحفاظ على قاعدة القروبات القديمة بدون تعديل")
+            throw IllegalStateException("تم فتح فلتر المجموعات لكن لم تظهر صفوف قابلة للقراءة في Accessibility؛ تم الحفاظ على قاعدة القروبات القديمة")
         }
 
-        val syncPackage = requireSelectedPackage()
+        if (syncCancelRequested) throw CancellationException("تم إيقاف المزامنة")
         val syncGeneration = System.currentTimeMillis()
         val unifiedCandidates = found.values.mapIndexed { index, candidate ->
             candidate.copy(
@@ -415,7 +485,7 @@ object ExtractionController {
         val added = repository.addDiscoveredGroupCandidates(unifiedCandidates, syncGeneration)
         repository.finalizeGroupSync(syncPackage, syncGeneration)
         repository.log(null, "INFO", "sync-complete", "تمت مزامنة ${found.size} قروب حقيقي عبر فلتر المجموعات، جديد منها $added")
-        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت مزامنة القروبات: ${found.size} — حدد ما تريد ثم ابدأ", syncFound = found.size)
+        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت مزامنة القروبات: ${found.size} — جاهزة للاستخراج حتى بدون تحديد يدوي", syncFound = found.size)
         refreshStats()
         return added
             } finally {
@@ -427,20 +497,36 @@ object ExtractionController {
         svc: WhatsAppAccessibilityService,
         timing: TimingPolicy
     ): Boolean {
-        val root = svc.currentRoot() ?: return false
-        if (adapter.isGroupsFilterActive(root)) return true
-        val before = adapter.snapshot(root).signature
-        val clicked = adapter.activateGroupsFilter(root) ||
-            svc.tapBounds(adapter.groupsFilterBounds(root), timing.gestureDurationMs)
-        if (!clicked) return false
-        awaitUiChange(timing.searchOpenMs)
-        // Some WhatsApp builds do not expose selected/checked on filter chips. A successful exact
-        // chip click is enough; content change or selected state merely strengthens the evidence.
-        val afterRoot = svc.currentRoot()
-        val after = adapter.snapshot(afterRoot).signature
-        val active = adapter.isGroupsFilterActive(afterRoot)
-        repository.log(null, "INFO", "groups-filter", "clicked=$clicked active=$active changed=${before != after}")
-        return active || before != after
+        repeat(5) { attempt ->
+            var root = svc.currentRoot() ?: return@repeat
+            if (adapter.isGroupsFilterActive(root)) return true
+            if (!adapter.isConversationListVisible(root)) {
+                adapter.activateChatsTab(root)
+                awaitUiChange(maxOf(timing.searchOpenMs, 140L))
+                root = svc.currentRoot() ?: return@repeat
+            }
+            val beforeCandidates = adapter.collectChatListCandidates(root).take(6).toSet()
+            val before = adapter.snapshot(root).signature
+            val clicked = adapter.activateGroupsFilter(root) ||
+                svc.tapBounds(adapter.groupsFilterBounds(root), timing.gestureDurationMs)
+            if (!clicked) {
+                awaitUiChange(120L + attempt * 40L)
+                return@repeat
+            }
+            awaitUiChange(maxOf(timing.searchOpenMs, 160L))
+            val afterRoot = svc.currentRoot()
+            val after = adapter.snapshot(afterRoot).signature
+            val active = adapter.isGroupsFilterActive(afterRoot)
+            val afterCandidates = adapter.collectChatListCandidates(afterRoot).take(6).toSet()
+            val contentChanged = before != after || beforeCandidates != afterCandidates
+            repository.log(null, "INFO", "groups-filter", "attempt=${attempt + 1} active=$active changed=$contentChanged rows=${afterCandidates.size}")
+            // v2.20: never trust a populated/changed list as proof that the Groups filter is active.
+            // If WhatsApp does not expose selected/checked state, return false and use the slower
+            // row-by-row Group Info verification fallback. This prevents private chats from being
+            // persisted as groups.
+            if (active) return true
+        }
+        return false
     }
 
     private suspend fun scanConversationList(
@@ -449,19 +535,23 @@ object ExtractionController {
         found: MutableMap<String, GroupSyncCandidate>
     ) {
         var stableRounds = 0
-        var lastSignature: Int? = null
+        var noNewRounds = 0
+        var lastVisibleSignature = Int.MIN_VALUE
         var iterations = 0
-        while (found.size < ExtractionPolicy.MAX_SYNC_ITEMS && iterations++ < 1_200) {
+        val deadline = SystemClock.elapsedRealtime() + 35_000L
+        while (found.size < ExtractionPolicy.MAX_SYNC_ITEMS && iterations++ < 1_200 && SystemClock.elapsedRealtime() < deadline) {
+            if (syncCancelRequested) throw CancellationException("تم إيقاف المزامنة")
             awaitIfPaused()
             val root = svc.currentRoot()
             if (root == null) { awaitUiChange(timing.eventQuietMs); continue }
             if (!adapter.isWhatsAppRoot(root, requireSelectedPackage())) {
                 openWhatsApp(); awaitUiChange(timing.recoveryMs); continue
             }
-            val snapshot = adapter.snapshot(root)
+            val visible = adapter.collectChatListCandidatesDetailed(root)
+            val visibleSignature = visible.map { it.name.trim().lowercase() }.sorted().joinToString("|").hashCode()
             val before = found.size
-            adapter.collectChatListCandidatesDetailed(root).forEach { candidate ->
-                val key = candidate.name.lowercase()
+            visible.forEach { candidate ->
+                val key = candidate.name.trim().lowercase()
                 val previous = found[key]
                 found[key] = if (previous == null) candidate else previous.copy(
                     unreadCount = maxOf(previous.unreadCount, candidate.unreadCount),
@@ -471,16 +561,111 @@ object ExtractionController {
                     communityParentHint = previous.communityParentHint || candidate.communityParentHint
                 )
             }
-            _state.value = _state.value.copy(syncFound = found.size, message = "تمت مزامنة ${found.size} قروب — قراءة قائمة المجموعات مستمرة")
+            _state.value = _state.value.copy(syncFound = found.size, message = "مزامنة القروبات • ${found.size} محفوظ • صفحة ${iterations}")
 
-            stableRounds = if (snapshot.signature == lastSignature && before == found.size) stableRounds + 1 else 0
-            lastSignature = snapshot.signature
-            if (stableRounds >= 3) break
+            noNewRounds = if (before == found.size) noNewRounds + 1 else 0
+            stableRounds = if (visibleSignature == lastVisibleSignature && before == found.size) stableRounds + 1 else 0
+            lastVisibleSignature = visibleSignature
+            if (stableRounds >= 3 || noNewRounds >= 8) break
 
             val accepted = adapter.scrollChatListForward(root) || svc.swipeChatListForward(timing.gestureDurationMs)
             if (!accepted) stableRounds++
             awaitBurstWithoutSaving(timing)
         }
+        repository.log(null, "INFO", "sync-list-pass", "iterations=$iterations rows=${found.size} stable=$stableRounds noNew=$noNewRounds")
+    }
+
+    /**
+     * Safe fallback for WhatsApp builds that hide the Groups filter from Accessibility.
+     * It never persists a visible chat until Group Info is structurally confirmed. Search is not used.
+     */
+    private suspend fun scanAndVerifyConversationList(
+        svc: WhatsAppAccessibilityService,
+        timing: TimingPolicy,
+        found: MutableMap<String, GroupSyncCandidate>,
+        label: String
+    ) {
+        val checked = hashSetOf<String>()
+        var stable = 0
+        var noNew = 0
+        val deadline = SystemClock.elapsedRealtime() + 55_000L
+        var page = 0
+
+        while (page++ < 180 && SystemClock.elapsedRealtime() < deadline && found.size < ExtractionPolicy.MAX_SYNC_ITEMS) {
+            if (syncCancelRequested) throw CancellationException("تم إيقاف المزامنة")
+            awaitIfPaused()
+            var root = svc.currentRoot()
+            if (!adapter.isWhatsAppRoot(root, requireSelectedPackage())) {
+                openWhatsApp()
+                if (!awaitWhatsAppRoot(svc, requireSelectedPackage(), 2_500L)) break
+                recoverChatsSurface(svc, timing, requireSelectedPackage())
+                root = svc.currentRoot()
+            }
+            if (root == null) {
+                awaitUiChange(timing.eventQuietMs)
+                continue
+            }
+
+            val visible = adapter.collectChatListCandidatesDetailed(root).toList()
+            val beforeFound = found.size
+            var verifiedOnPage = 0
+
+            for (candidate in visible) {
+                val key = candidate.name.trim().lowercase()
+                if (!checked.add(key)) continue
+                val fresh = svc.currentRoot() ?: break
+                val opened = adapter.openVisibleChatListRow(fresh, candidate.name) ||
+                    svc.tapBounds(adapter.visibleChatListRowBounds(fresh, candidate.name), timing.gestureDurationMs)
+                if (!opened) continue
+
+                awaitUiChange(maxOf(timing.groupOpenMs, 180L))
+                val chatRoot = svc.currentRoot()
+                if (!adapter.isConversationOpenForTarget(chatRoot, candidate.name, requireSelectedPackage())) {
+                    svc.performBack()
+                    awaitUiChange(maxOf(timing.searchOpenMs, 130L))
+                    recoverChatsSurface(svc, timing, requireSelectedPackage())
+                    continue
+                }
+
+                val openedInfo = adapter.openCurrentChatInfo(chatRoot, candidate.name) ||
+                    svc.tapBounds(adapter.currentChatHeaderBounds(chatRoot, candidate.name), timing.gestureDurationMs)
+                var isGroup = false
+                if (openedInfo) {
+                    awaitUiChange(maxOf(timing.groupOpenMs, 180L))
+                    isGroup = adapter.isGroupInfoScreen(svc.currentRoot())
+                    svc.performBack()
+                    awaitUiChange(maxOf(timing.searchOpenMs, 130L))
+                }
+
+                if (isGroup) {
+                    found[key] = candidate.copy(
+                        whatsappPackage = requireSelectedPackage(),
+                        lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST,
+                        verifiedGroupHint = true
+                    )
+                    verifiedOnPage++
+                    _state.value = _state.value.copy(
+                        syncFound = found.size,
+                        message = "مزامنة $label • ${found.size} قروب مؤكّد"
+                    )
+                }
+
+                // Back to Chats regardless of whether the visible row was a private chat or a group.
+                if (!adapter.isConversationListVisible(svc.currentRoot())) {
+                    svc.performBack()
+                    awaitUiChange(maxOf(timing.searchOpenMs, 130L))
+                }
+                recoverChatsSurface(svc, timing, requireSelectedPackage())
+            }
+
+            noNew = if (found.size == beforeFound) noNew + 1 else 0
+            val listRoot = svc.currentRoot()
+            val moved = adapter.scrollChatListForward(listRoot) || svc.swipeChatListForward(timing.gestureDurationMs)
+            awaitBurstWithoutSaving(timing)
+            stable = if (!moved || (visible.isEmpty() && verifiedOnPage == 0)) stable + 1 else 0
+            if (stable >= 3 || noNew >= 8) break
+        }
+        repository.log(null, "INFO", "sync-verified-fallback", "$label checked=${checked.size} groups=${found.size} pages=$page")
     }
 
     private suspend fun restoreConversationListPosition(
@@ -503,6 +688,23 @@ object ExtractionController {
         }
     }
 
+
+    /**
+     * v2.17.1 PipelineFix: extraction must be able to consume the synchronized group cache
+     * even when the user did not manually tick rows. This keeps the synchronized GroupRecord
+     * as the source of truth while avoiding a shared `selected=1` side effect for Publisher.
+     */
+    private suspend fun extractionTargets(targetPackage: String): List<TargetGroup> {
+        val explicitlySelected = repository.pendingSelectedGroups(targetPackage)
+        if (explicitlySelected.isNotEmpty()) return explicitlySelected
+        return repository.groups().filter { group ->
+            !group.stale &&
+                group.discovered &&
+                group.status !in setOf(GroupStatus.COMPLETED, GroupStatus.SKIPPED_NOT_GROUP) &&
+                (group.whatsappPackage.isBlank() || group.whatsappPackage == targetPackage)
+        }
+    }
+
     private suspend fun runExtraction(resetRun: Boolean) {
         try {
             allowIncompleteCheckpointResume = !resetRun
@@ -516,9 +718,9 @@ object ExtractionController {
                 betweenItemsDelayMs = prefs.betweenItemsDelayMs
             )
             if (resetRun) repository.resetRunStatuses(targetPackage)
-            var groups = repository.pendingSelectedGroups(targetPackage)
+            var groups = extractionTargets(targetPackage)
             if (groups.isEmpty()) {
-                finishRun("لا توجد مجموعات محددة تحتاج إلى استخراج")
+                finishRun("لا توجد قروبات مزامنة/محددة تحتاج إلى استخراج")
                 return
             }
 
@@ -544,7 +746,7 @@ object ExtractionController {
             }
             awaitUiChange(ExtractionPolicy.timing(prefs.speed).groupOpenMs)
 
-            groups = repository.pendingSelectedGroups(targetPackage)
+            groups = extractionTargets(targetPackage)
             groups.forEachIndexed { index, group ->
                 awaitIfPaused()
                 if (!stateStore.active) return
@@ -701,34 +903,8 @@ object ExtractionController {
         return result
     }
 
-    private suspend fun searchAndOpenGroup(groupName: String, prefs: ExtractionPreferences): Boolean {
-        val svc = service ?: return false
-        val timing = ExtractionPolicy.timing(prefs.speed)
-        repeat(3) { attempt ->
-            awaitIfPaused()
-            ensureWhatsAppForeground(prefs)
-            var root = svc.currentRoot()
-            var textSet = adapter.setSearchText(root, groupName)
-            if (!textSet && adapter.findAndClickSearch(root)) {
-                awaitUiChange(timing.searchOpenMs)
-                root = svc.currentRoot()
-                textSet = adapter.setSearchText(root, groupName)
-            }
-            if (textSet) {
-                awaitUiChange(timing.searchResultMs)
-                root = svc.currentRoot()
-                if (adapter.openSearchResult(root, groupName)) {
-                    _state.value = _state.value.copy(status = EngineStatus.OPENING_GROUP, message = "فتح المجموعة")
-                    awaitUiChange(timing.groupOpenMs)
-                    if (adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
-                    awaitUiChange(timing.eventQuietMs)
-                    if (adapter.isConversationOpenForTarget(svc.currentRoot(), groupName, selectedPackageOrNull())) return true
-                }
-            }
-            if (attempt < 2) { svc.performBack(); awaitUiChange(timing.searchOpenMs) }
-        }
-        return false
-    }
+    // Search-based extraction was intentionally removed in v2.20. Extraction must open only
+    // synchronized GroupRecord entries through visible-list/scroll matching.
 
     private suspend fun verifyAutoDiscoveredGroup(group: TargetGroup, prefs: ExtractionPreferences): Boolean {
         val svc = service ?: return false
@@ -1056,6 +1232,10 @@ object ExtractionController {
     }
 
     private suspend fun awaitIfPaused() {
+        while (syncPauseRequested && !syncCancelRequested) {
+            _state.value = _state.value.copy(status = EngineStatus.PAUSED, message = "مزامنة القروبات متوقفة مؤقتًا")
+            delay(180)
+        }
         while (stateStore.active && stateStore.paused) {
             _state.value = _state.value.copy(status = EngineStatus.PAUSED, message = "متوقف مؤقتًا — البيانات محفوظة")
             delay(180)
@@ -1124,57 +1304,167 @@ object ExtractionController {
         val packageName = requireSelectedPackage()
         _state.value = _state.value.copy(message = "Shizuku: ربط واجهة ${WhatsAppInstanceRegistry.labelFor(packageName)}")
         ShizukuBridge.reset(appContext)
-        var tree = awaitShizukuTree(packageName)
-            ?: throw IllegalStateException("Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile")
-
-        for (attempt in 0 until 4) {
-            if (shizukuUi.isConversationListVisible(tree, packageName)) break
-            shizukuUi.back()
-            delay(timing.searchOpenMs.coerceAtMost(300L))
-            tree = awaitShizukuTree(packageName, 1_000L) ?: tree
-        }
-        if (!shizukuUi.isConversationListVisible(tree, packageName)) {
-            throw IllegalStateException("Shizuku يرى واتساب لكن تعذر الوصول إلى قائمة الدردشات")
+        if (!ShizukuBridge.ensureBound(appContext)) {
+            throw IllegalStateException("Shizuku جاهز لكن UserService لم يرتبط")
         }
 
-        val filterClicked = shizukuUi.clickGroupsFilter(tree, packageName)
-        if (!filterClicked) throw IllegalStateException("Shizuku لم يجد فلتر المجموعات؛ أوقفت المزامنة لحماية قاعدة GroupRecord")
-        delay(timing.searchOpenMs.coerceAtMost(350L))
-        tree = awaitShizukuTree(packageName, 1_200L) ?: throw IllegalStateException("اختفت واجهة واتساب بعد فلتر المجموعات")
+        var tree = awaitShizukuTree(packageName, 1_200L)
+        if (tree == null) {
+            ShizukuBridge.launchPackage(appContext, packageName)
+            tree = awaitShizukuTree(packageName, 5_000L)
+                ?: throw IllegalStateException("Shizuku متصل لكن UIAutomation لا يرى واجهة واتساب المحددة في هذا Profile")
+        }
+
+        // Reach Chats without blindly backing out of WhatsApp. Prefer bottom navigation first.
+        var listReady = shizukuUi.isConversationListVisible(tree, packageName)
+        for (pass in 0 until 8) {
+            if (listReady) break
+            if (shizukuUi.clickChatsTab(tree, packageName)) {
+                delay(maxOf(timing.searchOpenMs, 140L).coerceAtMost(420L))
+                tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                listReady = shizukuUi.isConversationListVisible(tree, packageName)
+                if (listReady) break
+            }
+            if (pass < 6) {
+                shizukuUi.back()
+                delay(maxOf(timing.searchOpenMs, 140L).coerceAtMost(420L))
+                tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                listReady = shizukuUi.isConversationListVisible(tree, packageName)
+            }
+        }
+        if (!listReady) {
+            throw IllegalStateException("Shizuku يرى واتساب لكن تعذر الوصول إلى تبويب الدردشات")
+        }
+
+        var filterClicked = false
+        for (attempt in 0 until 5) {
+            if (shizukuUi.clickGroupsFilter(tree, packageName)) {
+                delay(maxOf(timing.searchOpenMs, 150L).coerceAtMost(450L))
+                tree = awaitShizukuTree(packageName, 1_200L) ?: tree
+                filterClicked = true
+                // Some WhatsApp builds do not expose selected=true on the filter; rows are the stronger proof.
+                if (shizukuUi.collectChatCandidates(tree, packageName).isNotEmpty()) break
+            } else {
+                delay(120L)
+                tree = awaitShizukuTree(packageName, 500L) ?: tree
+            }
+        }
+        if (!filterClicked) {
+            throw IllegalStateException("Shizuku لم يجد فلتر المجموعات؛ أوقفت المزامنة لحماية قاعدة GroupRecord")
+        }
 
         val found = linkedMapOf<String, GroupSyncCandidate>()
-        var stable = 0
-        var lastSignature = Int.MIN_VALUE
-        var sequence = shizukuUi.eventSequence(packageName)
-        for (iteration in 0 until 1_000) {
-            awaitIfPaused()
-            val beforeCount = found.size
-            shizukuUi.collectChatCandidates(tree, packageName).forEach { c ->
-                val key = c.name.lowercase()
-                val prev = found[key]
-                found[key] = if (prev == null) c else prev.copy(
-                    unreadCount = maxOf(prev.unreadCount, c.unreadCount),
-                    activityText = prev.activityText ?: c.activityText,
-                    active = prev.active || c.active,
-                    publishableHint = prev.publishableHint || c.publishableHint,
-                    communityParentHint = prev.communityParentHint || c.communityParentHint
-                )
-            }
-            _state.value = _state.value.copy(syncFound = found.size, message = "Shizuku: تمت قراءة ${found.size} قروب")
-            stable = if (tree.signature == lastSignature && beforeCount == found.size) stable + 1 else 0
-            lastSignature = tree.signature
-            if (stable >= 3 || found.size >= ExtractionPolicy.MAX_SYNC_ITEMS) break
-            val moved = shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())
-            if (!moved) stable++
-            val frame = shizukuUi.waitFrame(packageName, sequence, timing.eventQuietMs.toInt().coerceAtLeast(40))
-            sequence = frame.first
-            tree = frame.second.takeIf { it.state == "OK" } ?: shizukuUi.snapshot(packageName)
-        }
-        if (found.isEmpty()) throw IllegalStateException("Shizuku لم يستخرج أي صف قروب من قائمة المجموعات")
 
+        suspend fun scanCurrentList(label: String) {
+            var stable = 0
+            var noNew = 0
+            var lastVisibleSignature = Int.MIN_VALUE
+            var sequence = shizukuUi.eventSequence(packageName)
+            val deadline = SystemClock.elapsedRealtime() + 35_000L
+            var iterations = 0
+            while (
+                iterations++ < 1_000 &&
+                found.size < ExtractionPolicy.MAX_SYNC_ITEMS &&
+                SystemClock.elapsedRealtime() < deadline
+            ) {
+                if (syncCancelRequested) throw CancellationException("تم إيقاف مزامنة Shizuku")
+                awaitIfPaused()
+                val visible = shizukuUi.collectChatCandidates(tree, packageName)
+                val visibleSignature = visible
+                    .map { it.name.trim().lowercase() }
+                    .sorted()
+                    .joinToString("|")
+                    .hashCode()
+                val beforeCount = found.size
+                visible.forEach { candidate ->
+                    val key = candidate.name.trim().lowercase()
+                    val previous = found[key]
+                    found[key] = if (previous == null) candidate else previous.copy(
+                        unreadCount = maxOf(previous.unreadCount, candidate.unreadCount),
+                        activityText = previous.activityText ?: candidate.activityText,
+                        active = previous.active || candidate.active,
+                        publishableHint = previous.publishableHint || candidate.publishableHint,
+                        communityParentHint = previous.communityParentHint || candidate.communityParentHint
+                    )
+                }
+                _state.value = _state.value.copy(
+                    syncFound = found.size,
+                    message = "Shizuku: $label • ${found.size} قروب"
+                )
+                noNew = if (beforeCount == found.size) noNew + 1 else 0
+                stable = if (visibleSignature == lastVisibleSignature && beforeCount == found.size) stable + 1 else 0
+                lastVisibleSignature = visibleSignature
+                if (stable >= 3 || noNew >= 8) break
+
+                val moved = shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())
+                if (!moved) stable++
+                val frame = shizukuUi.waitFrame(
+                    packageName,
+                    sequence,
+                    timing.eventQuietMs.toInt().coerceAtLeast(40)
+                )
+                sequence = frame.first
+                tree = frame.second.takeIf { it.state == "OK" }
+                    ?: shizukuUi.snapshot(packageName)
+            }
+            repository.log(
+                null,
+                "INFO",
+                "sync-shizuku-pass",
+                "$label rows=${found.size} stable=$stable noNew=$noNew"
+            )
+        }
+
+        scanCurrentList("الدردشات")
+
+        // Search for Archived by moving toward the top. This is bounded and never uses text Search.
+        var archivedHandled = false
+        for (archivePass in 0 until 20) {
+            if (syncCancelRequested) throw CancellationException("تم إيقاف مزامنة Shizuku")
+            if (shizukuUi.openArchived(tree, packageName)) {
+                delay(maxOf(timing.groupOpenMs, 180L).coerceAtMost(500L))
+                tree = awaitShizukuTree(packageName, 1_200L) ?: tree
+
+                var archiveFilter = false
+                for (filterAttempt in 0 until 4) {
+                    if (shizukuUi.clickGroupsFilter(tree, packageName)) {
+                        archiveFilter = true
+                        delay(maxOf(timing.searchOpenMs, 150L).coerceAtMost(450L))
+                        tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                        break
+                    }
+                    delay(100L)
+                    tree = awaitShizukuTree(packageName, 500L) ?: tree
+                }
+                if (archiveFilter) scanCurrentList("المؤرشفة")
+
+                shizukuUi.back()
+                delay(180L)
+                tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                archivedHandled = true
+                break
+            }
+
+            val moved = shizukuUi.swipeListBackward(tree, timing.gestureDurationMs.toInt())
+            delay(80L)
+            tree = awaitShizukuTree(packageName, 800L) ?: tree
+            if (!moved) break
+        }
+        repository.log(
+            null,
+            "INFO",
+            "sync-shizuku-archive",
+            if (archivedHandled) "Archived scanned" else "Archived not found/exposed"
+        )
+
+        if (found.isEmpty()) {
+            throw IllegalStateException("Shizuku لم يستخرج أي صف قروب من قائمة المجموعات")
+        }
+
+        if (syncCancelRequested) throw CancellationException("تم إيقاف مزامنة Shizuku")
         val generation = System.currentTimeMillis()
-        val candidates = found.values.mapIndexed { index, c ->
-            c.copy(
+        val candidates = found.values.mapIndexed { index, candidate ->
+            candidate.copy(
                 whatsappPackage = packageName,
                 syncOrder = index,
                 lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST,
@@ -1183,8 +1473,17 @@ object ExtractionController {
         }
         val added = repository.addDiscoveredGroupCandidates(candidates, generation)
         repository.finalizeGroupSync(packageName, generation)
-        repository.log(null, "INFO", "sync-shizuku-complete", "Shizuku UIAutomation: groups=${found.size} added=$added profile=${_state.value.profileInfo.profileKey}")
-        _state.value = _state.value.copy(status = EngineStatus.IDLE, message = "اكتملت مزامنة Shizuku: ${found.size} — حدد القروبات ثم ابدأ", syncFound = found.size)
+        repository.log(
+            null,
+            "INFO",
+            "sync-shizuku-complete",
+            "Shizuku UIAutomation: groups=${found.size} added=$added profile=${_state.value.profileInfo.profileKey}"
+        )
+        _state.value = _state.value.copy(
+            status = EngineStatus.IDLE,
+            message = "اكتملت مزامنة Shizuku: ${found.size} — محفوظة وجاهزة للاستخراج",
+            syncFound = found.size
+        )
         refreshStats()
         return added
     }
@@ -1203,7 +1502,7 @@ object ExtractionController {
             failRun("Shizuku جاهز لكن UIAutomation لا يرى ${WhatsAppInstanceRegistry.labelFor(targetPackage)} في هذا Profile")
             return
         }
-        val groups = repository.pendingSelectedGroups(targetPackage).ifEmpty { initialGroups }
+        val groups = extractionTargets(targetPackage).ifEmpty { initialGroups }
         _state.value = _state.value.copy(message = "Shizuku Event-first • ${groups.size} قروب", runGroupCount = groups.size)
         groups.forEachIndexed { index, group ->
             awaitIfPaused()
