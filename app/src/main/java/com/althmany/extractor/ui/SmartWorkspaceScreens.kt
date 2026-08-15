@@ -387,13 +387,11 @@ fun WorkspaceExtractionScreen(
                     WsSectionTitle("اختيار نسخة واتساب", Icons.Default.Chat)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         items(engine.availableWhatsApp.filter { it.launchable }, key = { it.packageName }) { instance ->
-                            item {
-                                WsChoice(
-                                    label = "${instance.labelAr}\n${instance.packageName}",
-                                    selected = engine.selectedWhatsAppPackage == instance.packageName,
-                                    modifier = Modifier.width(150.dp)
-                                ) { onTargetWhatsApp(instance.packageName) }
-                            }
+                            WsChoice(
+                                label = "${instance.labelAr}\n${instance.packageName}",
+                                selected = engine.selectedWhatsAppPackage == instance.packageName,
+                                modifier = Modifier.width(150.dp)
+                            ) { onTargetWhatsApp(instance.packageName) }
                         }
                     }
                 }
