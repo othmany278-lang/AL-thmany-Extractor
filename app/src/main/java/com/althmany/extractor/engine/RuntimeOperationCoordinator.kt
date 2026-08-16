@@ -19,8 +19,9 @@ object RuntimeOperationCoordinator {
     private val owner = AtomicReference<RuntimeOperation?>(null)
 
     fun tryAcquire(operation: RuntimeOperation): Boolean {
-        val current = owner.get()
-        return current == operation || owner.compareAndSet(null, operation)
+        // Strict single-owner gate. Sync and Extraction both use EXTRACTION,
+        // so the same enum may not re-enter while it already owns WhatsApp UI.
+        return owner.compareAndSet(null, operation)
     }
 
     fun release(operation: RuntimeOperation) {

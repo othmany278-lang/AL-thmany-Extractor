@@ -17,6 +17,12 @@ class RuntimeOperationCoordinatorTest {
         assertEquals(RuntimeOperation.EXTRACTION, RuntimeOperationCoordinator.current())
     }
 
+    @Test fun sameOperationCannotReenter() {
+        assertTrue(RuntimeOperationCoordinator.tryAcquire(RuntimeOperation.EXTRACTION))
+        assertFalse(RuntimeOperationCoordinator.tryAcquire(RuntimeOperation.EXTRACTION))
+        assertEquals(RuntimeOperation.EXTRACTION, RuntimeOperationCoordinator.current())
+    }
+
     @Test fun releaseAllowsNextEngine() {
         assertTrue(RuntimeOperationCoordinator.tryAcquire(RuntimeOperation.SCAN))
         RuntimeOperationCoordinator.release(RuntimeOperation.SCAN)

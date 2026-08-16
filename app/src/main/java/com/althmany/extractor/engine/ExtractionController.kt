@@ -735,13 +735,22 @@ object ExtractionController {
                 return
             }
             _state.value = _state.value.copy(status = EngineStatus.OPENING_WHATSAPP, message = "فتح ${WhatsAppInstanceRegistry.labelFor(requireSelectedPackage())} داخل ${_state.value.profileInfo.labelAr}")
-            val liveAccessibility = awaitRuntimeService(1_200L)
-            if (liveAccessibility == null) {
+            val liveAccessibility = awaitRuntimeService(1_500L)
+            val accessibilityReady = liveAccessibility != null &&
+                awaitWhatsAppRoot(liveAccessibility, targetPackage, 1_800L)
+
+            if (!accessibilityReady) {
                 if (ShizukuBridge.status().ready) {
+                    _state.value = _state.value.copy(message = "Accessibility لا ترى واتساب — التحويل الفعلي إلى Shizuku")
                     runExtractionViaShizuku(groups, prefs, targetPackage)
                     return
                 }
-                failRun("تم فتح واتساب لكن لا Accessibility محلية ولا Shizuku جاهز داخل نفس البيئة")
+                failRun(
+                    if (liveAccessibility == null)
+                        "RUNTIME_NO_BACKEND: لا Accessibility محلية ولا Shizuku جاهز"
+                    else
+                        "ACCESSIBILITY_ROOT_NOT_READY: الخدمة متصلة لكن rootInActiveWindow لا يرى واتساب المحدد"
+                )
                 return
             }
             awaitUiChange(ExtractionPolicy.timing(prefs.speed).groupOpenMs)
@@ -1300,6 +1309,107 @@ object ExtractionController {
         return last.takeIf { it.state == "OK" && shizukuUi.isWhatsApp(it, packageName) && it.nodes.isNotEmpty() }
     }
 
+    /**
+     * Safe Shizuku fallback when WhatsApp hides the Groups filter.
+     * Each visible row is opened and Group Info must be proven before persistence.
+     * Search is never used.
+     */
+    private suspend fun scanAndVerifyConversationListViaShizuku(
+        packageName: String,
+        timing: TimingPolicy,
+        found: MutableMap<String, GroupSyncCandidate>,
+        initialTree: ShizukuUiTree,
+        label: String
+    ): ShizukuUiTree {
+        var tree = initialTree
+        val checked = hashSetOf<String>()
+        var stable = 0
+        var page = 0
+        val deadline = SystemClock.elapsedRealtime() + 70_000L
+
+        while (
+            page++ < 180 &&
+            SystemClock.elapsedRealtime() < deadline &&
+            found.size < ExtractionPolicy.MAX_SYNC_ITEMS
+        ) {
+            if (syncCancelRequested) throw CancellationException("تم إيقاف مزامنة Shizuku")
+            awaitIfPaused()
+
+            if (!shizukuUi.isConversationListVisible(tree, packageName)) {
+                if (shizukuUi.clickChatsTab(tree, packageName)) {
+                    delay(maxOf(timing.searchOpenMs, 140L).coerceAtMost(420L))
+                    tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                }
+            }
+
+            val visible = shizukuUi.collectChatCandidates(tree, packageName).toList()
+            val beforeFound = found.size
+
+            for (candidate in visible) {
+                val key = candidate.name.trim().lowercase()
+                if (!checked.add(key)) continue
+                if (!shizukuUi.openVisibleChat(tree, candidate.name, packageName)) continue
+
+                delay(maxOf(timing.groupOpenMs, 180L).coerceAtMost(420L))
+                tree = awaitShizukuTree(packageName, 1_000L) ?: tree
+                if (!shizukuUi.isConversationOpenForTarget(tree, candidate.name, packageName)) {
+                    shizukuUi.back()
+                    delay(maxOf(timing.searchOpenMs, 130L).coerceAtMost(360L))
+                    tree = awaitShizukuTree(packageName, 900L) ?: tree
+                    continue
+                }
+
+                var isGroup = false
+                if (shizukuUi.clickHeader(tree, candidate.name, packageName)) {
+                    delay(maxOf(timing.groupOpenMs, 180L).coerceAtMost(420L))
+                    val infoTree = awaitShizukuTree(packageName, 1_000L)
+                    if (infoTree != null) {
+                        tree = infoTree
+                        isGroup = shizukuUi.isGroupInfo(tree)
+                    }
+                    shizukuUi.back()
+                    delay(maxOf(timing.searchOpenMs, 130L).coerceAtMost(360L))
+                    tree = awaitShizukuTree(packageName, 900L) ?: tree
+                }
+
+                if (isGroup) {
+                    found[key] = candidate.copy(
+                        whatsappPackage = packageName,
+                        lastKnownAccessMethod = GroupAccessMethod.VISIBLE_LIST,
+                        verifiedGroupHint = true
+                    )
+                    _state.value = _state.value.copy(
+                        syncFound = found.size,
+                        message = "Shizuku: $label • ${found.size} قروب مؤكّد"
+                    )
+                }
+
+                if (!shizukuUi.isConversationListVisible(tree, packageName)) {
+                    shizukuUi.back()
+                    delay(maxOf(timing.searchOpenMs, 130L).coerceAtMost(360L))
+                    tree = awaitShizukuTree(packageName, 900L) ?: tree
+                }
+            }
+
+            val beforeSignature = tree.signature
+            val moved = shizukuUi.swipeListForward(tree, timing.gestureDurationMs.toInt())
+            delay(maxOf(timing.eventQuietMs, 70L).coerceAtMost(180L))
+            val next = awaitShizukuTree(packageName, 800L) ?: tree
+            stable = if (!moved || next.signature == beforeSignature ||
+                (visible.isEmpty() && found.size == beforeFound)) stable + 1 else 0
+            tree = next
+            if (stable >= 3) break
+        }
+
+        repository.log(
+            null,
+            "INFO",
+            "sync-shizuku-verified-fallback",
+            "$label checked=${checked.size} groups=${found.size} pages=$page"
+        )
+        return tree
+    }
+
     private suspend fun syncGroupsViaShizuku(timing: TimingPolicy): Int {
         val packageName = requireSelectedPackage()
         _state.value = _state.value.copy(message = "Shizuku: ربط واجهة ${WhatsAppInstanceRegistry.labelFor(packageName)}")
@@ -1352,11 +1462,19 @@ object ExtractionController {
                 tree = awaitShizukuTree(packageName, 500L) ?: tree
             }
         }
-        if (!filterClicked) {
-            throw IllegalStateException("Shizuku لم يجد فلتر المجموعات؛ أوقفت المزامنة لحماية قاعدة GroupRecord")
-        }
-
         val found = linkedMapOf<String, GroupSyncCandidate>()
+
+        if (!filterClicked) {
+            repository.log(
+                null,
+                "WARN",
+                "sync-shizuku-groups-filter-fallback",
+                "فلتر Groups غير مكشوف؛ إثبات كل صف عبر Group Info بدون Search"
+            )
+            tree = scanAndVerifyConversationListViaShizuku(
+                packageName, timing, found, tree, "الدردشات"
+            )
+        }
 
         suspend fun scanCurrentList(label: String) {
             var stable = 0
@@ -1418,11 +1536,13 @@ object ExtractionController {
             )
         }
 
-        scanCurrentList("الدردشات")
+        if (filterClicked) {
+            scanCurrentList("الدردشات")
+        }
 
         // Search for Archived by moving toward the top. This is bounded and never uses text Search.
         var archivedHandled = false
-        for (archivePass in 0 until 20) {
+        for (archivePass in 0 until 80) {
             if (syncCancelRequested) throw CancellationException("تم إيقاف مزامنة Shizuku")
             if (shizukuUi.openArchived(tree, packageName)) {
                 delay(maxOf(timing.groupOpenMs, 180L).coerceAtMost(500L))
@@ -1439,7 +1559,13 @@ object ExtractionController {
                     delay(100L)
                     tree = awaitShizukuTree(packageName, 500L) ?: tree
                 }
-                if (archiveFilter) scanCurrentList("المؤرشفة")
+                if (archiveFilter) {
+                    scanCurrentList("المؤرشفة")
+                } else {
+                    tree = scanAndVerifyConversationListViaShizuku(
+                        packageName, timing, found, tree, "المؤرشفة"
+                    )
+                }
 
                 shizukuUi.back()
                 delay(180L)

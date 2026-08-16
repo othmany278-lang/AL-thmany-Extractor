@@ -157,11 +157,8 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
             )
             val anyRunning = extractionRunning || scanState.running || publishState.running
             val anyPaused = engine.status == com.althmany.extractor.data.EngineStatus.PAUSED || scanState.paused || publishState.paused
-            val startEnabled = when (screen) {
-                AppScreen.SCAN -> scanItems.isNotEmpty() && engine.selectedWhatsAppPackage != null
-                AppScreen.PUBLISH -> publishState.messageText.isNotBlank() && engine.selectedWhatsAppPackage != null
-                else -> engine.selectedWhatsAppPackage != null
-            }
+            // Persistent mini bar = real global sequential pipeline.
+            val startEnabled = engine.selectedWhatsAppPackage != null
             val operationLabel = when {
                 publishState.running || publishState.paused -> "النشر • ${publishState.info}"
                 scanState.running || scanState.paused -> "الفحص • ${scanState.message}"
@@ -174,13 +171,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     running = anyRunning,
                     paused = anyPaused,
                     startEnabled = startEnabled,
-                    onStart = {
-                        when (screen) {
-                            AppScreen.SCAN -> ScanController.start()
-                            AppScreen.PUBLISH -> PublishController.start(publishState.messageText)
-                            else -> ExtractionController.start()
-                        }
-                    },
+                    onStart = viewModel::startAllSmart,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations
@@ -219,7 +210,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                         viewModel.importScanLinksFromExtraction()
                         screen = AppScreen.SCAN
                     },
-                    onStart = ExtractionController::start,
+                    onStart = viewModel::startExtractionSmart,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations,
@@ -237,7 +228,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onRounds = viewModel::setMaxRounds,
                     onGroups = { screen = AppScreen.GROUPS },
                     onResults = { viewModel.reloadLinks(); screen = AppScreen.RESULTS },
-                    onStart = ExtractionController::start,
+                    onStart = viewModel::startExtractionSmart,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations,
@@ -258,7 +249,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     },
                     onSpeed = viewModel::setScanSpeed,
                     onAttempts = viewModel::setScanMaxAttempts,
-                    onStart = ScanController::start,
+                    onStart = viewModel::startScanWithInput,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations,
@@ -308,7 +299,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onSync = viewModel::syncGroups,
                     onSelected = viewModel::setSelected,
                     onPreset = viewModel::applyGroupSelectionPreset,
-                    onStartExtraction = { screen = AppScreen.EXTRACT; ExtractionController.start() },
+                    onStartExtraction = { screen = AppScreen.EXTRACT; viewModel.startExtractionSmart() },
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations
@@ -342,7 +333,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onOpenAccessibility = ExtractionController::openAccessibilitySettings,
                     onRequestShizuku = { ExtractionController.requestShizukuPermission() },
                     onProbeShizuku = ExtractionController::probeShizuku,
-                    onStart = ExtractionController::start,
+                    onStart = viewModel::startAllSmart,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations

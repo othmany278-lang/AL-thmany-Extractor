@@ -21,7 +21,7 @@ object NativeProfileEngineRouter {
         val recommended = when { access -> RuntimeBackendKind.ACCESSIBILITY; shizuku -> RuntimeBackendKind.SHIZUKU; else -> RuntimeBackendKind.NONE }
         val reason = when (recommended) {
             RuntimeBackendKind.ACCESSIBILITY -> "Accessibility محلية ومتصلة"
-            RuntimeBackendKind.SHIZUKU -> "Accessibility غير متصلة محليًا وShizuku جاهز للفحص"
+            RuntimeBackendKind.SHIZUKU -> "Shizuku لديه Binder+إذن؛ سيتم إثبات UIAutomation وواتساب عند بدء العملية"
             RuntimeBackendKind.NONE -> "فعّل Accessibility داخل نفس Profile أو شغّل Shizuku واختبر الرؤية"
         }
         return NativeProfileEngineSnapshot(profile.profileKey, access, shizuku, recommended, reason)

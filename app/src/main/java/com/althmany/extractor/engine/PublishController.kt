@@ -126,30 +126,66 @@ object PublishController {
         return live
     }
 
-    private suspend fun ensureRuntimeReady(timeoutMs: Long = 5_000L): Boolean {
-        val packageName = ExtractionController.state.value.selectedWhatsAppPackage ?: return false
+    private suspend fun ensureRuntimeReady(timeoutMs: Long = 8_500L): Boolean {
+        val packageName = ExtractionController.state.value.selectedWhatsAppPackage ?: run {
+            _state.value = _state.value.copy(info = "RUNTIME_NO_TARGET: اختر نسخة واتساب أولاً")
+            return false
+        }
         var opened = ExtractionController.openWhatsApp()
         if (!opened && ShizukuBridge.status().ready) {
             opened = ShizukuBridge.launchPackage(appContext, packageName)
         }
-        if (!opened) return false
-        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 3_000L)
+        if (!opened) {
+            _state.value = _state.value.copy(info = "RUNTIME_OPEN_FAILED: تعذر فتح نسخة واتساب المحددة")
+            return false
+        }
+
+        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 1_800L)
         while (SystemClock.elapsedRealtime() < accessDeadline) {
             val live = recoverLiveService()
             if (live != null && adapter.isWhatsAppRoot(live.currentRoot(), packageName)) {
                 shizukuMode = false
+                _state.value = _state.value.copy(info = "READY_ACCESSIBILITY: محرك النشر يرى واتساب")
                 return true
             }
-            withTimeoutOrNull(180L) { uiEvents.first() }
+            withTimeoutOrNull(150L) { uiEvents.first() }
             delay(20L)
         }
-        if (ShizukuBridge.status().ready && ShizukuBridge.ensureBound(appContext)) {
-            val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 3_000L).coerceAtLeast(1_500L)
-            while (SystemClock.elapsedRealtime() < deadline) {
-                val tree = shizukuUi.snapshot(packageName)
-                if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName)) { shizukuMode = true; return true }
-                delay(90L)
+
+        val sh = ShizukuBridge.status()
+        if (sh.ready) {
+            if (!ShizukuBridge.ensureBound(appContext, 4_500L)) {
+                _state.value = _state.value.copy(info = "SHIZUKU_BIND_FAILED: الإذن موجود لكن UserService لم يرتبط")
+            } else {
+                ShizukuBridge.launchPackage(appContext, packageName)
+                var lastDetail = "NO_SNAPSHOT"
+                var resetTried = false
+                val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 1_800L).coerceAtLeast(5_000L)
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    val tree = shizukuUi.snapshot(packageName)
+                    lastDetail = "${tree.state}:${tree.detail.take(140)}"
+                    if (tree.state == "OK" && tree.nodes.isNotEmpty() && shizukuUi.isWhatsApp(tree, packageName)) {
+                        shizukuMode = true
+                        _state.value = _state.value.copy(info = "READY_SHIZUKU: UIAutomation يرى واتساب (${tree.nodes.size} node)")
+                        return true
+                    }
+                    if (!resetTried && tree.state in setOf("UNAVAILABLE", "ERROR", "NO_ROOT")) {
+                        resetTried = true
+                        ShizukuBridge.reset(appContext)
+                        ShizukuBridge.launchPackage(appContext, packageName)
+                    }
+                    delay(110L)
+                }
+                _state.value = _state.value.copy(info = "SHIZUKU_UI_NOT_READY: $lastDetail")
             }
+        } else {
+            _state.value = _state.value.copy(
+                info = when {
+                    !sh.binderAlive -> "SHIZUKU_BINDER_OFF: شغّل Shizuku أو Accessibility"
+                    !sh.permissionGranted -> "SHIZUKU_PERMISSION_DENIED: امنح التطبيق إذن Shizuku"
+                    else -> "RUNTIME_NO_BACKEND: لا يوجد محرك تحكم جاهز"
+                }
+            )
         }
         shizukuMode = false
         return false
@@ -226,11 +262,7 @@ object PublishController {
         setDraft(clean)
         pauseRequested = false
         job = scope.launch {
-            _state.value = _state.value.copy(status = PublishEngineStatus.PREPARING, running = true, info = "Preflight: التحقق من واتساب ومحرك الإرسال")
-            if (!ensureRuntimeReady()) {
-                _state.value = _state.value.copy(status = PublishEngineStatus.ERROR, running = false, info = "فشل Preflight: واتساب/Accessibility غير جاهز في نفس البيئة")
-                return@launch
-            }
+            _state.value = _state.value.copy(status = PublishEngineStatus.PREPARING, running = true, info = "Preflight: التحقق من القروبات ثم محرك الإرسال")
             val selectedGroups = repository.selectedGroups().filter {
                 it.active && it.publishable && !it.communityParent &&
                     (it.whatsappPackage.isBlank() || it.whatsappPackage == packageName)
@@ -343,11 +375,12 @@ object PublishController {
     private suspend fun runPublish(runId: Long) {
         try {
             if (!ensureRuntimeReady()) {
+                val detail = _state.value.info
                 _state.value = _state.value.copy(
                     status = PublishEngineStatus.ERROR,
                     running = false,
                     paused = false,
-                    info = "تعذر فتح واتساب أو توصيل Accessibility داخل نفس البيئة"
+                    info = if (detail.isBlank()) "RUNTIME_NOT_READY: تعذر تجهيز محرك النشر" else detail
                 )
                 return
             }
@@ -605,12 +638,12 @@ object PublishController {
         }
         // Some WhatsApp builds need one final Send on the preview; if the chat is already visible,
         // the first positive action committed the share and we do not click again.
-        if (!adapter.isGroupVisible(svc.currentRoot(), item.groupName, run.targetPackage)) {
+        if (!adapter.isConversationOpenForTarget(svc.currentRoot(), item.groupName, run.targetPackage)) {
             adapter.clickPositiveShareAction(svc.currentRoot())
             awaitEventOrDelay(420)
         }
 
-        val chatVisible = waitUntil(4_500L) { adapter.isGroupVisible(service?.currentRoot(), item.groupName, run.targetPackage) }
+        val chatVisible = waitUntil(4_500L) { adapter.isConversationOpenForTarget(service?.currentRoot(), item.groupName, run.targetPackage) }
         if (chatVisible) {
             repository.groupByName(item.groupName, run.targetPackage)?.let {
                 repository.recordGroupAccessSuccess(it.id, GroupAccessMethod.SHARE_PICKER)
@@ -701,7 +734,7 @@ object PublishController {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             val tree = shizukuUi.snapshot(packageName)
-            if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName)) return tree
+            if (tree.state == "OK" && tree.nodes.isNotEmpty() && shizukuUi.isWhatsApp(tree, packageName)) return tree
             delay(90L)
         }
         return null
@@ -712,7 +745,7 @@ object PublishController {
             if (!ShizukuBridge.launchPackage(appContext, packageName)) return false
         }
         var tree = awaitShizukuTree(packageName, 1_500L) ?: return false
-        if (shizukuUi.isGroupVisible(tree, group.name, packageName)) return verifyShizukuGroupIfNeeded(group, packageName, tree)
+        if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) return verifyShizukuGroupIfNeeded(group, packageName, tree)
 
         for (attempt in 0 until 4) {
             if (shizukuUi.collectChatCandidates(tree, packageName).size >= 2) break
@@ -722,7 +755,7 @@ object PublishController {
         }
         if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
             delay(180L); tree = awaitShizukuTree(packageName, 900L) ?: tree
-            if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+            if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) {
                 repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.VISIBLE_LIST)
                 return verifyShizukuGroupIfNeeded(group, packageName, tree)
             }
@@ -733,7 +766,7 @@ object PublishController {
             tree = awaitShizukuTree(packageName, 700L) ?: continue
             if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
                 delay(180L); tree = awaitShizukuTree(packageName, 850L) ?: tree
-                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+                if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) {
                     repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH)
                     return verifyShizukuGroupIfNeeded(group, packageName, tree)
                 }
@@ -750,7 +783,7 @@ object PublishController {
             tree = awaitShizukuTree(packageName, 650L) ?: continue
             if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
                 delay(180L); tree = awaitShizukuTree(packageName, 850L) ?: tree
-                if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+                if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) {
                     repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SCROLL_MATCH)
                     return verifyShizukuGroupIfNeeded(group, packageName, tree)
                 }
@@ -770,7 +803,7 @@ object PublishController {
                 tree = awaitShizukuTree(packageName, 900L) ?: return false
                 if (shizukuUi.openVisibleChat(tree, group.name, packageName)) {
                     delay(180L); tree = awaitShizukuTree(packageName, 900L) ?: tree
-                    if (shizukuUi.isGroupVisible(tree, group.name, packageName)) {
+                    if (shizukuUi.isConversationOpenForTarget(tree, group.name, packageName)) {
                         repository.recordGroupAccessSuccess(group.id, GroupAccessMethod.SEARCH_FALLBACK)
                         return verifyShizukuGroupIfNeeded(group, packageName, tree)
                     }
@@ -782,7 +815,7 @@ object PublishController {
     }
 
     private suspend fun verifyShizukuGroupIfNeeded(group: TargetGroup, packageName: String, initial: ShizukuUiTree): Boolean {
-        if (group.verifiedGroup) return shizukuUi.isGroupVisible(initial, group.name, packageName)
+        if (group.verifiedGroup) return shizukuUi.isConversationOpenForTarget(initial, group.name, packageName)
         var tree = initial
         if (!shizukuUi.clickHeader(tree, group.name, packageName)) return false
         delay(180L); tree = awaitShizukuTree(packageName, 900L) ?: return false
@@ -790,7 +823,7 @@ object PublishController {
         shizukuUi.back()
         delay(150L)
         val chatTree = awaitShizukuTree(packageName, 900L) ?: return false
-        val backInChat = shizukuUi.isGroupVisible(chatTree, group.name, packageName)
+        val backInChat = shizukuUi.isConversationOpenForTarget(chatTree, group.name, packageName)
         if (ok && backInChat) {
             repository.updateGroupCapabilities(
                 group.id,
@@ -891,13 +924,13 @@ object PublishController {
         if (!shizukuUi.clickPositiveAction(tree, run.targetPackage)) return PublishDecision(PublishStatus.FAILED, "Shizuku: لم يظهر زر المتابعة/الإرسال")
         delay(300L); tree = awaitShizukuTree(run.targetPackage, 1_200L) ?: tree
 
-        if (run.contentMode == PublishContentMode.IMAGE_WITH_CAPTION && run.message.isNotBlank() && !shizukuUi.isGroupVisible(tree, item.groupName, run.targetPackage)) {
+        if (run.contentMode == PublishContentMode.IMAGE_WITH_CAPTION && run.message.isNotBlank() && !shizukuUi.isConversationOpenForTarget(tree, item.groupName, run.targetPackage)) {
             shizukuUi.setComposerText(run.targetPackage, run.message)
             delay(150L); tree = awaitShizukuTree(run.targetPackage, 700L) ?: tree
             shizukuUi.clickPositiveAction(tree, run.targetPackage); delay(300L)
         }
         tree = awaitShizukuTree(run.targetPackage, 2_000L) ?: tree
-        val chatVisible = shizukuUi.isGroupVisible(tree, item.groupName, run.targetPackage)
+        val chatVisible = shizukuUi.isConversationOpenForTarget(tree, item.groupName, run.targetPackage)
         if (!chatVisible) return PublishDecision(PublishStatus.UNCERTAIN, "Shizuku نفذ مشاركة المرفق لكن تعذر إثبات القروب؛ لن يعاد تلقائيًا")
 
         if (run.contentMode == PublishContentMode.VCF_WITH_TEXT && run.message.isNotBlank()) {
@@ -936,16 +969,16 @@ object PublishController {
         // Verify the opened target is actually a group before writing. This verification is cached
         // in GroupRecord after success, but a fresh UI check is still used when the record was not
         // previously verified.
-        if (group.verifiedGroup) return adapter.isGroupVisible(svc.currentRoot(), group.name, packageName)
+        if (group.verifiedGroup) return adapter.isConversationOpenForTarget(svc.currentRoot(), group.name, packageName)
         var root = svc.currentRoot()
         val openedInfo = adapter.openCurrentChatInfo(root, group.name) ||
             svc.tapBounds(adapter.currentChatHeaderBounds(root, group.name), timing.gestureDurationMs)
         if (!openedInfo) return false
         val groupInfo = waitUntil(3_500L) { adapter.isGroupInfoScreen(service?.currentRoot()) }
         svc.performBack()
-        waitUntil(3_000L) { adapter.isGroupVisible(service?.currentRoot(), group.name, packageName) }
+        waitUntil(3_000L) { adapter.isConversationOpenForTarget(service?.currentRoot(), group.name, packageName) }
         if (groupInfo) repository.updateGroupCapabilities(group.id, verified = true, active = true, publishable = !group.communityParent, communityParent = group.communityParent)
-        return groupInfo && adapter.isGroupVisible(svc.currentRoot(), group.name, packageName)
+        return groupInfo && adapter.isConversationOpenForTarget(svc.currentRoot(), group.name, packageName)
     }
 
     private fun publishAccessTiming(speed: PublishSpeedProfile): TimingPolicy = when (speed) {

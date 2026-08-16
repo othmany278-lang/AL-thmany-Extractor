@@ -127,7 +127,7 @@ private fun WsStatusStrip(engine: ExtractionUiState) {
         ) {
             MiniState("الحالة", if (engine.status == EngineStatus.ERROR) "خطأ" else "نشطة", engine.status != EngineStatus.ERROR)
             MiniState("${engine.profileInfo.labelAr}", engine.selectedWhatsAppPackage?.substringAfterLast('.')?.uppercase() ?: "—", engine.selectedWhatsAppPackage != null)
-            MiniState("Shizuku", if (engine.shizukuReady) "متصل" else "غير متصل", engine.shizukuReady)
+            MiniState("Shizuku", if (engine.shizukuReady) "إذن متاح" else "غير متصل", engine.shizukuReady)
             MiniState("السرعة", engine.speed.labelAr.substringBefore(' '), true)
             MiniState("المحاولات", engine.maxSameGroupRetries.toString(), true)
         }
@@ -310,7 +310,7 @@ fun WorkspaceHomeScreen(
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     WsSectionTitle("حالة المحرك والبيئة", Icons.Default.Shield)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WsStat("Shizuku", if (engine.shizukuReady) "جاهز" else "—", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
+                        WsStat("Shizuku", if (engine.shizukuReady) "إذن" else "—", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
                         WsStat("Accessibility", if (engine.serviceConnected) "متصل" else "—", if (engine.serviceConnected) WsGreen else WsDanger, Modifier.weight(1f))
                     }
                 }
@@ -363,7 +363,7 @@ fun WorkspaceExtractionScreen(
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     WsSectionTitle("محرك التشغيل", Icons.Default.Memory)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WsStat("Shizuku", if (engine.shizukuReady) "متصل وجاهز" else "غير جاهز", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
+                        WsStat("Shizuku", if (engine.shizukuReady) "إذن متاح — يختبر عند التشغيل" else "غير جاهز", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
                         WsStat("Accessibility", if (accessibilityEnabled && engine.serviceConnected) "متاح ومفعل" else "غير متصل", if (accessibilityEnabled && engine.serviceConnected) WsGreen else WsDanger, Modifier.weight(1f))
                     }
                 }
@@ -472,7 +472,7 @@ fun WorkspaceScanScreen(
     onAction: (ScanActionMode) -> Unit,
     onSpeed: (ScanSpeedProfile) -> Unit,
     onAttempts: (Int) -> Unit,
-    onStart: () -> Unit,
+    onStart: (String) -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStopAll: () -> Unit,
@@ -546,11 +546,32 @@ fun WorkspaceScanScreen(
             }
         }
         item {
-            Surface(modifier = Modifier.fillMaxWidth().height(56.dp).clickable(enabled = items.isNotEmpty() && engine.selectedWhatsAppPackage != null, onClick = onStart), shape = RoundedCornerShape(16.dp), color = WsGreen.copy(alpha = 0.17f), border = BorderStroke(1.dp, WsGreen)) {
+            Surface(modifier = Modifier.fillMaxWidth().height(56.dp).clickable(
+                enabled = (items.isNotEmpty() || text.isNotBlank()) && engine.selectedWhatsAppPackage != null,
+                onClick = {
+                    val pending = text
+                    text = ""
+                    onStart(pending)
+                }
+            ), shape = RoundedCornerShape(16.dp), color = WsGreen.copy(alpha = 0.17f), border = BorderStroke(1.dp, WsGreen)) {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.RocketLaunch, null, tint = WsGreen); Spacer(Modifier.width(8.dp)); Text(if (scan.actionMode == ScanActionMode.SCAN_AND_JOIN) "بدء الفحص + الانضمام" else "بدء الفحص", color = WsText, fontWeight = FontWeight.Bold) }
             }
         }
-        item { WsGlobalControls(running, paused, items.isNotEmpty() && engine.selectedWhatsAppPackage != null, onStart, onPause, onResume, onStopAll) }
+        item {
+            WsGlobalControls(
+                running,
+                paused,
+                (items.isNotEmpty() || text.isNotBlank()) && engine.selectedWhatsAppPackage != null,
+                {
+                    val pending = text
+                    text = ""
+                    onStart(pending)
+                },
+                onPause,
+                onResume,
+                onStopAll
+            )
+        }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ExportFormat.entries.forEach { f -> WsChoice(f.name, false, WsGreen, Modifier.weight(1f)) { onExport(f) } }
@@ -768,7 +789,7 @@ fun WorkspaceSettingsScreen(
                     WsSectionTitle("بيئة التشغيل", Icons.Default.Computer)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         WsChoice("الملف الشخصي\n${engine.profileInfo.labelAr}", true, WsGreen, Modifier.weight(1f)) { }
-                        WsChoice("Shizuku\n${if (engine.shizukuReady) "جاهز" else "إعداد"}", engine.shizukuReady, WsGreen, Modifier.weight(1f), if (engine.shizukuReady) onProbeShizuku else onRequestShizuku)
+                        WsChoice("Shizuku\n${if (engine.shizukuReady) "اختبار/إذن" else "إعداد"}", engine.shizukuReady, WsGreen, Modifier.weight(1f), if (engine.shizukuReady) onProbeShizuku else onRequestShizuku)
                         WsChoice("Accessibility\n${if (engine.serviceConnected) "متصل" else "إعداد"}", engine.serviceConnected, WsCyan, Modifier.weight(1f), onOpenAccessibility)
                     }
                 }

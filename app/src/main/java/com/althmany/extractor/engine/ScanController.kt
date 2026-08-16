@@ -96,23 +96,66 @@ object ScanController {
         return live
     }
 
-    private suspend fun ensureRuntimeReady(timeoutMs: Long = 5_000L): Boolean {
-        val packageName = ExtractionController.state.value.selectedWhatsAppPackage ?: return false
-        var opened = ExtractionController.openWhatsApp()
-        if (!opened && ShizukuBridge.status().ready) opened = ShizukuBridge.launchPackage(appContext, packageName)
-        if (!opened) return false
-        recoverLiveService()?.let { shizukuMode = false; return true }
-        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 1_200L)
-        while (SystemClock.elapsedRealtime() < accessDeadline) {
-            delay(75L); recoverLiveService()?.let { shizukuMode = false; return true }
+    private suspend fun ensureRuntimeReady(timeoutMs: Long = 8_500L): Boolean {
+        val packageName = ExtractionController.state.value.selectedWhatsAppPackage ?: run {
+            _state.value = _state.value.copy(message = "RUNTIME_NO_TARGET: اختر نسخة واتساب أولاً")
+            return false
         }
-        if (ShizukuBridge.status().ready && ShizukuBridge.ensureBound(appContext)) {
-            val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 1_200L).coerceAtLeast(1_500L)
-            while (SystemClock.elapsedRealtime() < deadline) {
-                val tree = shizukuUi.snapshot(packageName)
-                if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName)) { shizukuMode = true; return true }
-                delay(90L)
+        var opened = ExtractionController.openWhatsApp()
+        if (!opened && ShizukuBridge.status().ready) {
+            opened = ShizukuBridge.launchPackage(appContext, packageName)
+        }
+        if (!opened) {
+            _state.value = _state.value.copy(message = "RUNTIME_OPEN_FAILED: تعذر فتح نسخة واتساب المحددة")
+            return false
+        }
+
+        val accessDeadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 1_800L)
+        while (SystemClock.elapsedRealtime() < accessDeadline) {
+            val live = recoverLiveService()
+            if (live != null && adapter.isWhatsAppRoot(live.currentRoot(), packageName)) {
+                shizukuMode = false
+                _state.value = _state.value.copy(message = "READY_ACCESSIBILITY: واتساب ظاهر لخدمة Accessibility")
+                return true
             }
+            withTimeoutOrNull(150L) { uiEvents.first() }
+            delay(20L)
+        }
+
+        val sh = ShizukuBridge.status()
+        if (sh.ready) {
+            if (!ShizukuBridge.ensureBound(appContext, 4_500L)) {
+                _state.value = _state.value.copy(message = "SHIZUKU_BIND_FAILED: الإذن موجود لكن UserService لم يرتبط")
+            } else {
+                ShizukuBridge.launchPackage(appContext, packageName)
+                var lastDetail = "NO_SNAPSHOT"
+                var resetTried = false
+                val deadline = SystemClock.elapsedRealtime() + (timeoutMs - 1_800L).coerceAtLeast(5_000L)
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    val tree = shizukuUi.snapshot(packageName)
+                    lastDetail = "${tree.state}:${tree.detail.take(140)}"
+                    if (tree.state == "OK" && tree.nodes.isNotEmpty() && shizukuUi.isWhatsApp(tree, packageName)) {
+                        shizukuMode = true
+                        _state.value = _state.value.copy(message = "READY_SHIZUKU: UIAutomation يرى واتساب (${tree.nodes.size} node)")
+                        return true
+                    }
+                    if (!resetTried && tree.state in setOf("UNAVAILABLE", "ERROR", "NO_ROOT")) {
+                        resetTried = true
+                        ShizukuBridge.reset(appContext)
+                        ShizukuBridge.launchPackage(appContext, packageName)
+                    }
+                    delay(110L)
+                }
+                _state.value = _state.value.copy(message = "SHIZUKU_UI_NOT_READY: $lastDetail")
+            }
+        } else {
+            _state.value = _state.value.copy(
+                message = when {
+                    !sh.binderAlive -> "SHIZUKU_BINDER_OFF: شغّل Shizuku"
+                    !sh.permissionGranted -> "SHIZUKU_PERMISSION_DENIED: امنح التطبيق إذن Shizuku"
+                    else -> "RUNTIME_NO_BACKEND: لا يوجد محرك تحكم جاهز"
+                }
+            )
         }
         shizukuMode = false
         return false
@@ -210,16 +253,27 @@ object ScanController {
 
     private suspend fun runScan() {
         try {
+            repository.resetScanRunningItems()
+            val configuredScope = _state.value.scope
+            val preflightScope = if (configuredScope == ScanScope.RECHECK_ALL) ScanScope.PENDING_ONLY else configuredScope
+            if (configuredScope != ScanScope.RECHECK_ALL && repository.scanItemsForScope(preflightScope).isEmpty()) {
+                _state.value = _state.value.copy(
+                    status = ScanEngineStatus.COMPLETED,
+                    running = false,
+                    message = "NO_SCAN_ITEMS: أضف روابط للفحص أولاً"
+                )
+                refreshStats()
+                return
+            }
             if (!ensureRuntimeReady()) {
+                val detail = _state.value.message
                 _state.value = _state.value.copy(
                     status = ScanEngineStatus.ERROR,
                     running = false,
-                    message = "تعذر فتح واتساب أو توصيل Accessibility داخل نفس البيئة"
+                    message = if (detail.isBlank()) "RUNTIME_NOT_READY: تعذر تجهيز محرك الفحص" else detail
                 )
                 return
             }
-            repository.resetScanRunningItems()
-            val configuredScope = _state.value.scope
             val scanScope = if (configuredScope == ScanScope.RECHECK_ALL) {
                 // RECHECK_ALL is a one-shot command. Convert it to PENDING_ONLY immediately after
                 // resetting so an interrupted job resumes from the remaining rows instead of
@@ -528,7 +582,7 @@ object ScanController {
                 val post = InviteScanClassifier.classify(adapter.snapshot(current).texts)
                 bestPost = chooseBetter(bestPost, post)
                 if (!approval) {
-                    val chatVisible = decision.groupName?.let { adapter.isGroupVisible(current, it, packageName) } == true
+                    val chatVisible = decision.groupName?.let { adapter.isConversationOpenForTarget(current, it, packageName) } == true
                     if (post.status == ScanStatus.ALREADY_MEMBER || chatVisible) {
                         return decision.copy(
                             status = ScanStatus.JOINED,
@@ -574,7 +628,7 @@ object ScanController {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             val tree = shizukuUi.snapshot(packageName)
-            if (tree.state == "OK" && shizukuUi.isWhatsApp(tree, packageName)) return tree
+            if (tree.state == "OK" && tree.nodes.isNotEmpty() && shizukuUi.isWhatsApp(tree, packageName)) return tree
             delay(75L)
         }
         return null
@@ -640,7 +694,7 @@ object ScanController {
         while(SystemClock.uptimeMillis()<deadline){
             tree=awaitShizukuTree(packageName,600L)?:tree
             val post=InviteScanClassifier.classify(tree.texts);best=chooseBetter(best,post)
-            if(!approval){val chat=decision.groupName?.let{shizukuUi.isGroupVisible(tree,it,packageName)}==true;if(post.status==ScanStatus.ALREADY_MEMBER||chat)return decision.copy(status=ScanStatus.JOINED,detail="تم الانضمام والتحقق عبر Shizuku",signalCode="JOIN_VERIFIED",confidence=100,definitive=true)}
+            if(!approval){val chat=decision.groupName?.let{shizukuUi.isConversationOpenForTarget(tree,it,packageName)}==true;if(post.status==ScanStatus.ALREADY_MEMBER||chat)return decision.copy(status=ScanStatus.JOINED,detail="تم الانضمام والتحقق عبر Shizuku",signalCode="JOIN_VERIFIED",confidence=100,definitive=true)}
             else if(post.status==ScanStatus.REQUEST_PENDING)return post.copy(detail="تم إرسال الطلب والتحقق عبر Shizuku",signalCode="REQUEST_VERIFIED",confidence=100,definitive=true,groupName=post.groupName?:decision.groupName,memberCountText=post.memberCountText?:decision.memberCountText,inviteKind=if(post.inviteKind==InviteKind.UNKNOWN)decision.inviteKind else post.inviteKind)
             if(post.status in setOf(ScanStatus.INVALID,ScanStatus.FULL,ScanStatus.REMOVED,ScanStatus.ACCOUNT_LIMIT))return post
             delay(speed.settleDelayMs)

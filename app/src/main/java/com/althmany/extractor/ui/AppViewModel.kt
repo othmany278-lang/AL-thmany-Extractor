@@ -24,6 +24,8 @@ import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.engine.ScanScope
 import com.althmany.extractor.engine.ScanActionMode
 import com.althmany.extractor.engine.ScanSpeedProfile
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,6 +55,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    private var globalJob: Job? = null
 
     init {
         refresh()
@@ -117,6 +121,159 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun ensureGroupsReady(): Boolean {
+        val packageName = engineState.value.selectedWhatsAppPackage
+        if (packageName.isNullOrBlank()) {
+            _message.value = "RUNTIME_NO_TARGET: اختر نسخة واتساب أولاً"
+            return false
+        }
+        fun usable(list: List<TargetGroup>) = list.filter {
+            !it.stale && it.active && (it.discovered || it.selected) &&
+                (it.whatsappPackage.isBlank() || it.whatsappPackage == packageName)
+        }
+
+        var current = usable(repo.groups())
+        if (current.isNotEmpty()) {
+            _groups.value = repo.groups()
+            return true
+        }
+
+        _message.value = "SYNC_REQUIRED: لا توجد قروبات — بدء المزامنة تلقائيًا"
+        val sync = runCatching { ExtractionController.syncGroupsNow() }
+        if (sync.isFailure) {
+            _message.value = "SYNC_FAILED: ${sync.exceptionOrNull()?.message ?: "تعذرت المزامنة"}"
+            _groups.value = repo.groups()
+            return false
+        }
+
+        val all = repo.groups()
+        _groups.value = all
+        current = usable(all)
+        if (current.isEmpty()) {
+            _message.value = "NO_GROUPS_SYNCED: انتهت المزامنة بدون قروبات مؤكدة"
+            return false
+        }
+        _message.value = "SYNC_READY: ${current.size} قروب جاهز"
+        return true
+    }
+
+    fun startExtractionSmart() {
+        if (globalJob?.isActive == true) return
+        if (ExtractionController.isBusy() || ScanController.isRunning() || PublishController.isRunning()) {
+            _message.value = "هناك عملية تعمل بالفعل"
+            return
+        }
+        viewModelScope.launch {
+            if (ensureGroupsReady()) ExtractionController.start()
+        }
+    }
+
+    fun startScanWithInput(input: String) {
+        if (globalJob?.isActive == true) return
+        viewModelScope.launch {
+            if (input.isNotBlank()) {
+                val added = repo.addScanLinksFromText(input)
+                _message.value = "تمت إضافة $added رابط جديد — بدء الفحص"
+            }
+            _scanItems.value = repo.scanItems()
+            ScanController.refreshStats()
+            if (_scanItems.value.isEmpty()) {
+                _message.value = "NO_SCAN_ITEMS: الصق روابط أو استوردها من الاستخراج"
+                return@launch
+            }
+            ScanController.start()
+        }
+    }
+
+    private suspend fun waitExtractionFinished(): Boolean {
+        var started = false
+        while (true) {
+            started = started || ExtractionController.isBusy()
+            val status = engineState.value.status
+            if (status == com.althmany.extractor.data.EngineStatus.ERROR ||
+                status == com.althmany.extractor.data.EngineStatus.STOPPED) return false
+            if (started && !ExtractionController.isBusy()) {
+                return status == com.althmany.extractor.data.EngineStatus.COMPLETED
+            }
+            delay(100L)
+        }
+    }
+
+    private suspend fun waitScanFinished(): Boolean {
+        var started = false
+        while (true) {
+            started = started || ScanController.isRunning()
+            val status = scanState.value.status
+            if (status == com.althmany.extractor.engine.ScanEngineStatus.ERROR ||
+                status == com.althmany.extractor.engine.ScanEngineStatus.STOPPED) return false
+            if (started && !ScanController.isRunning()) {
+                return status == com.althmany.extractor.engine.ScanEngineStatus.COMPLETED
+            }
+            delay(100L)
+        }
+    }
+
+    private suspend fun waitPublishFinished(): Boolean {
+        var started = false
+        while (true) {
+            started = started || PublishController.isRunning()
+            val status = publishState.value.status
+            if (status == com.althmany.extractor.engine.PublishEngineStatus.ERROR ||
+                status == com.althmany.extractor.engine.PublishEngineStatus.STOPPED) return false
+            if (started && !PublishController.isRunning()) {
+                return status == com.althmany.extractor.engine.PublishEngineStatus.COMPLETED
+            }
+            delay(100L)
+        }
+    }
+
+    fun startAllSmart() {
+        if (globalJob?.isActive == true ||
+            ExtractionController.isBusy() || ScanController.isRunning() || PublishController.isRunning()) {
+            _message.value = "لا يمكن بدء الكل: توجد عملية نشطة"
+            return
+        }
+
+        globalJob = viewModelScope.launch {
+            if (!ensureGroupsReady()) return@launch
+
+            _message.value = "1/4 • القروبات جاهزة — بدء الاستخراج"
+            ExtractionController.start()
+            if (!waitExtractionFinished()) {
+                _message.value = "PIPELINE_STOPPED: الاستخراج • ${engineState.value.message}"
+                return@launch
+            }
+
+            val imported = repo.importInviteLinksFromExtraction()
+            _scanItems.value = repo.scanItems()
+            ScanController.refreshStats()
+
+            if (_scanItems.value.isNotEmpty()) {
+                _message.value = "3/4 • بدء الفحص${if (scanState.value.actionMode == ScanActionMode.SCAN_AND_JOIN) " + الانضمام" else ""} • جديد $imported"
+                ScanController.start()
+                if (!waitScanFinished()) {
+                    _message.value = "PIPELINE_STOPPED: الفحص • ${scanState.value.message}"
+                    return@launch
+                }
+            } else {
+                _message.value = "3/4 • لا توجد روابط دعوة — تخطي الفحص"
+            }
+
+            val draft = publishState.value.messageText.trim()
+            if (draft.isNotBlank()) {
+                _message.value = "4/4 • بدء النشر"
+                PublishController.start(draft)
+                if (!waitPublishFinished()) {
+                    _message.value = "PIPELINE_STOPPED: النشر • ${publishState.value.info}"
+                    return@launch
+                }
+                _message.value = "PIPELINE_COMPLETED: اكتملت جميع المراحل"
+            } else {
+                _message.value = "PIPELINE_COMPLETED: اكتمل الاستخراج والفحص — النشر متخطى لعدم وجود رسالة"
+            }
+        }
+    }
+
     fun setMode(mode: ExtractionMode) = ExtractionController.setMode(mode)
     fun setSpeed(speed: SpeedProfile) = ExtractionController.setSpeed(speed)
     fun setMaxRounds(value: Int) = ExtractionController.setMaxScrollIterations(value)
@@ -150,10 +307,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Emergency/global stop: cancels every engine and releases the single WhatsApp UI owner. */
     fun stopAllOperations() {
+        globalJob?.cancel()
+        globalJob = null
         ExtractionController.stop()
         ScanController.stop()
         PublishController.stop()
-        _message.value = "تم إيقاف جميع العمليات"
+        _message.value = "تم إيقاف جميع العمليات والمسار العام"
     }
 
     fun setSelected(id: Long, selected: Boolean) {
