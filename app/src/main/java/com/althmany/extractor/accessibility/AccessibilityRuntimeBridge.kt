@@ -3,14 +3,13 @@ package com.althmany.extractor.accessibility
 import android.os.Process
 import android.os.SystemClock
 
-/**
- * Profile-local live Accessibility runtime registry.
- *
- * This mirrors the proven 2.8.0 runtime idea: the enabled service is considered live from the
- * actual service instance/callback/heartbeat, not only from Android Settings.  Controllers can
- * recover the same service instance after Activity/process lifecycle changes instead of failing
- * before WhatsApp is even opened.
- */
+data class AccessibilityBridgeSnapshot(
+    val connected: Boolean,
+    val androidUserId: Int,
+    val heartbeatAgeMs: Long?,
+    val lastObservedPackage: String?
+)
+
 object AccessibilityRuntimeBridge {
     @Volatile private var active: WhatsAppAccessibilityService? = null
     @Volatile private var connected: Boolean = false
@@ -47,10 +46,9 @@ object AccessibilityRuntimeBridge {
         }
     }
 
-    fun current(maxHeartbeatAgeMs: Long = 4_000L): WhatsAppAccessibilityService? {
+    fun current(maxHeartbeatAgeMs: Long = 5_000L): WhatsAppAccessibilityService? {
         val service = active ?: return null
-        if (!connected) return null
-        if (boundAndroidUserId != currentAndroidUserId()) return null
+        if (!connected || boundAndroidUserId != currentAndroidUserId()) return null
         val age = SystemClock.elapsedRealtime() - lastHeartbeatElapsed
         return service.takeIf { age in 0..maxHeartbeatAgeMs }
     }
@@ -63,5 +61,18 @@ object AccessibilityRuntimeBridge {
 
     fun isConnected(): Boolean = currentEvenIfQuiet() != null
     fun lastPackage(): String? = lastObservedPackage
+
+    fun snapshot(): AccessibilityBridgeSnapshot {
+        val age = lastHeartbeatElapsed.takeIf { it > 0L }?.let {
+            (SystemClock.elapsedRealtime() - it).coerceAtLeast(0L)
+        }
+        return AccessibilityBridgeSnapshot(
+            connected = isConnected(),
+            androidUserId = boundAndroidUserId,
+            heartbeatAgeMs = age,
+            lastObservedPackage = lastObservedPackage
+        )
+    }
+
     fun currentAndroidUserId(): Int = (Process.myUid() / 100_000).coerceAtLeast(0)
 }

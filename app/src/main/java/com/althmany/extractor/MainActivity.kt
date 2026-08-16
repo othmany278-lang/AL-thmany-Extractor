@@ -48,6 +48,7 @@ import com.althmany.extractor.ui.WorkspaceHomeScreen
 import com.althmany.extractor.ui.WorkspacePublishScreen
 import com.althmany.extractor.ui.WorkspaceScanScreen
 import com.althmany.extractor.ui.WorkspaceSettingsScreen
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()
@@ -87,6 +88,16 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
         if (android.os.Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         viewModel.refreshRuntimeEnvironment()
         viewModel.refresh()
+    }
+
+    LaunchedEffect(engine.accessibilityEnabledInSettings, engine.serviceConnected) {
+        if (engine.accessibilityEnabledInSettings && !engine.serviceConnected) {
+            repeat(20) {
+                delay(400L)
+                viewModel.refreshRuntimeEnvironment()
+                if (viewModel.engineState.value.serviceConnected) return@LaunchedEffect
+            }
+        }
     }
 
     val createDocument = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
@@ -277,7 +288,7 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onSpeed = viewModel::setPublishSpeed,
                     onNavigation = viewModel::setPublishNavigationMode,
                     onAttempts = viewModel::setPublishMaxAttempts,
-                    onStart = PublishController::start,
+                    onStart = viewModel::startPublishSmart,
                     onPause = viewModel::pauseActiveOperation,
                     onResume = viewModel::resumeActiveOperation,
                     onStopAll = viewModel::stopAllOperations,

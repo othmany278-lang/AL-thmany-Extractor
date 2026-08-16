@@ -24,6 +24,7 @@ import com.althmany.extractor.engine.ScanUiState
 import com.althmany.extractor.engine.ScanScope
 import com.althmany.extractor.engine.ScanActionMode
 import com.althmany.extractor.engine.ScanSpeedProfile
+import com.althmany.extractor.engine.RuntimeOperationCoordinator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -157,13 +158,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    private suspend fun prepareExplicitOperation(target: String): Boolean {
+        when (target) {
+            "EXTRACTION" -> {
+                if (ScanController.isRunning()) ScanController.stop()
+                if (PublishController.isRunning()) PublishController.stop()
+            }
+            "SCAN" -> {
+                if (ExtractionController.isBusy()) ExtractionController.stop()
+                if (PublishController.isRunning()) PublishController.stop()
+            }
+            "PUBLISH" -> {
+                if (ExtractionController.isBusy()) ExtractionController.stop()
+                if (ScanController.isRunning()) ScanController.stop()
+            }
+        }
+
+        var wait = 0
+        while (
+            (ExtractionController.isBusy() ||
+                (target != "SCAN" && ScanController.isRunning()) ||
+                (target != "PUBLISH" && PublishController.isRunning())) &&
+            wait++ < 50
+        ) {
+            delay(50L)
+        }
+
+        val owner = RuntimeOperationCoordinator.current()
+        if (owner != null) {
+            _message.value = "OPERATION_SWITCH_TIMEOUT: ما زالت ${owner.labelAr} تحرر واجهة واتساب"
+            return false
+        }
+        return true
+    }
+
     fun startExtractionSmart() {
         if (globalJob?.isActive == true) return
-        if (ExtractionController.isBusy() || ScanController.isRunning() || PublishController.isRunning()) {
-            _message.value = "هناك عملية تعمل بالفعل"
-            return
-        }
         viewModelScope.launch {
+            if (!prepareExplicitOperation("EXTRACTION")) return@launch
             if (ensureGroupsReady()) ExtractionController.start()
         }
     }
@@ -181,7 +213,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _message.value = "NO_SCAN_ITEMS: الصق روابط أو استوردها من الاستخراج"
                 return@launch
             }
+            if (!prepareExplicitOperation("SCAN")) return@launch
             ScanController.start()
+        }
+    }
+
+    fun startPublishSmart(message: String) {
+        if (globalJob?.isActive == true) return
+        viewModelScope.launch {
+            if (message.isBlank()) {
+                _message.value = "NO_PUBLISH_MESSAGE: اكتب رسالة النشر أولاً"
+                return@launch
+            }
+            if (!prepareExplicitOperation("PUBLISH")) return@launch
+            PublishController.start(message)
         }
     }
 

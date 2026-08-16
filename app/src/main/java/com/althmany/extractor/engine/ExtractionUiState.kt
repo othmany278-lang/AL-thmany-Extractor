@@ -10,6 +10,8 @@ import com.althmany.extractor.profile.WhatsAppInstance
 data class ExtractionUiState(
     val status: EngineStatus = EngineStatus.IDLE,
     val serviceConnected: Boolean = false,
+    val accessibilityEnabledInSettings: Boolean = false,
+    val accessibilityRuntimeDetail: String = "ACCESSIBILITY_NOT_CHECKED",
     /** Last WhatsApp package observed by Accessibility in the current profile. */
     val whatsappPackage: String? = null,
     val profileInfo: RuntimeProfileInfo = RuntimeProfileInfo.unknown(),

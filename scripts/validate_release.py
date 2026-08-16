@@ -81,8 +81,8 @@ checks = {
     'Kotlin 2.3.21': root_build.count('version "2.3.21"') >= 2,
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
-    'versionCode 2201': 'versionCode = 2201' in app_build,
-    'versionName 2.20.1': 'versionName = "2.20.1"' in app_build,
+    'versionCode 2202': 'versionCode = 2202' in app_build,
+    'versionName 2.20.2': 'versionName = "2.20.2"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -160,7 +160,7 @@ checks = {
     'Profile-local identity key': all(x in profile_env for x in ['profileKey', 'Process.myUserHandle()', 'isManagedProfile', 'SAMSUNG_ISOLATED']),
     'Work/Secure same-profile safety': 'لا يتم تجاوز Knox' in profile_env and 'يجب أن تكون نسخة AL-thmany وWhatsApp في ملف العمل نفسه' in profile_env,
     'Profile-local Accessibility heartbeat': all(x in profile_access for x in ['profile_accessibility_runtime_v215', 'recordServiceConnected', 'recordEvent', 'recordRoot']),
-    'AUTO backend router': all(x in profile_router for x in ['RuntimeBackendKind.ACCESSIBILITY', 'RuntimeBackendKind.SHIZUKU', 'ProfileAccessibilityRuntime.snapshot']),
+    'AUTO backend router': all(x in profile_router for x in ['RuntimeBackendKind.ACCESSIBILITY', 'RuntimeBackendKind.SHIZUKU', 'AccessibilityRuntimeBridge.currentEvenIfQuiet']),
     'Shizuku API/provider 13.1.5': all(x in app_build for x in ['dev.rikka.shizuku:api:13.1.5', 'dev.rikka.shizuku:provider:13.1.5']) and 'rikka.shizuku.ShizukuProvider' in manifest,
     'Shizuku AIDL enabled': 'aidl = true' in app_build,
     'Persistent Shizuku UiAutomation': all(x in shizuku_uia for x in ['rootInActiveWindow', 'setOnAccessibilityEventListener', 'injectInputEvent', 'ACTION_SET_TEXT']),
@@ -172,7 +172,7 @@ checks = {
     'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
     'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
     'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
-    'Workflow artifact v2.20.1': 'RuntimeFix-2.20.1' in workflow,
+    'Workflow artifact v2.20.2': 'RuntimeFix-2.20.2' in workflow,
         'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
     'Runtime sync row discovery': all(x in adapter for x in ['collectChatListCandidatesDetailedInternal', 'nearestClickable', 'activateChatsTab']) and 'scanConversationList' in extract,
     'Archived group synchronization': 'sync-archived-groups' in extract and 'openArchived' in shizuku_runtime,
@@ -204,4 +204,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.20.1 Runtime Fix source contract: PASS')
+print('\nAL-thmany Extractor 2.20.2 Runtime Fix source contract: PASS')

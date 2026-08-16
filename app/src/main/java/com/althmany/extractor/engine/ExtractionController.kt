@@ -65,6 +65,7 @@ object ExtractionController {
     private var runJob: Job? = null
     @Volatile private var syncCancelRequested: Boolean = false
     @Volatile private var syncPauseRequested: Boolean = false
+    @Volatile private var syncInProgress: Boolean = false
     private var allowIncompleteCheckpointResume: Boolean = false
 
     private val _state = MutableStateFlow(ExtractionUiState())
@@ -117,6 +118,18 @@ object ExtractionController {
         uiEvents.tryEmit(Unit)
     }
 
+    private fun enabledAccessibilityComponentPackage(): String? {
+        val className = WhatsAppAccessibilityService::class.java.name
+        val enabled = Settings.Secure.getString(
+            appContext.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        return enabled.split(':')
+            .map { it.trim() }
+            .firstOrNull { it.endsWith("/$className", ignoreCase = true) }
+            ?.substringBefore('/')
+    }
+
     fun refreshRuntimeEnvironment() {
         if (!::appContext.isInitialized || !::settingsStore.isInitialized) return
         val profile = RuntimeProfileDetector.detect(appContext)
@@ -124,21 +137,48 @@ object ExtractionController {
         val saved = settingsStore.get().targetWhatsAppPackage
         val selected = ProfileLaunchPolicy.resolveSelected(saved, available.map { it.packageName })
         if (selected != null && selected != saved) settingsStore.setTargetWhatsAppPackage(selected)
+
+        val enabledComponentPackage = enabledAccessibilityComponentPackage()
+        val enabledForThisApp = enabledComponentPackage == appContext.packageName
+        val wrongVariant = enabledComponentPackage != null && !enabledForThisApp
+
+        val bridgeService = AccessibilityRuntimeBridge.currentEvenIfQuiet()
+        if (bridgeService != null && service !== bridgeService) service = bridgeService
+        val bridge = AccessibilityRuntimeBridge.snapshot()
+        val liveService = bridgeService ?: service
+        val rootPackage = runCatching { liveService?.currentRoot()?.packageName?.toString() }.getOrNull()
         val localAccess = ProfileAccessibilityRuntime.snapshot(appContext)
         val shizuku = runCatching { ShizukuBridge.status() }.getOrNull()
         val route = NativeProfileEngineRouter.inspect(appContext)
+
+        val accessDetail = when {
+            wrongVariant ->
+                "ACCESSIBILITY_WRONG_VARIANT: enabled=$enabledComponentPackage current=${appContext.packageName}"
+            liveService != null && rootPackage != null ->
+                "ACCESSIBILITY_BOUND: root=$rootPackage user=${bridge.androidUserId}"
+            liveService != null ->
+                "ACCESSIBILITY_BOUND_WAITING_ROOT"
+            enabledForThisApp ->
+                "ACCESSIBILITY_ENABLED_NOT_BOUND"
+            else ->
+                "ACCESSIBILITY_DISABLED"
+        }
+
         _state.value = _state.value.copy(
             profileInfo = profile,
             availableWhatsApp = available,
             selectedWhatsAppPackage = selected,
             packageMismatch = false,
+            serviceConnected = liveService != null,
+            accessibilityEnabledInSettings = enabledForThisApp,
+            accessibilityRuntimeDetail = accessDetail,
             profileAccessibilityConnected = localAccess.localServiceConnected,
             shizukuReady = shizuku?.ready == true,
             shizukuDetail = when {
                 shizuku == null || !shizuku.binderAlive -> "Shizuku غير شغّال"
                 !shizuku.permissionGranted -> "Shizuku يحتاج إذن"
                 shizuku.userServiceBound -> "Shizuku متصل + UserService"
-                else -> "Shizuku جاهز للربط"
+                else -> "Shizuku لديه إذن — UIAutomation لم يُثبت بعد"
             },
             backendRecommendation = "${route.recommended.name}: ${route.reason}"
         )
@@ -207,7 +247,7 @@ object ExtractionController {
         _state.value = _state.value.copy(betweenItemsDelayMs = safe)
     }
 
-    fun isBusy(): Boolean = runJob?.isActive == true || stateStore.active
+    fun isBusy(): Boolean = syncInProgress || runJob?.isActive == true || stateStore.active
 
     fun start() {
         if (runJob?.isActive == true) return
@@ -300,9 +340,12 @@ object ExtractionController {
         stateStore.paused = false
         runJob?.cancel()
         runJob = null
-        RuntimeOperationCoordinator.release(RuntimeOperation.EXTRACTION)
+        if (!syncInProgress) RuntimeOperationCoordinator.release(RuntimeOperation.EXTRACTION)
         stateStore.clearRuntime()
-        _state.value = _state.value.copy(status = EngineStatus.STOPPED, message = "تم إيقاف المهمة")
+        _state.value = _state.value.copy(
+            status = EngineStatus.STOPPED,
+            message = if (syncInProgress) "إيقاف المزامنة جارٍ…" else "تم إيقاف المهمة"
+        )
         notifier.cancel()
         refreshStats()
     }
@@ -403,6 +446,7 @@ object ExtractionController {
             val owner = RuntimeOperationCoordinator.current()?.labelAr ?: "عملية أخرى"
             throw IllegalStateException("لا يمكن بدء المزامنة أثناء تشغيل $owner")
         }
+        syncInProgress = true
         try {
         if (runJob?.isActive == true || stateStore.active) throw IllegalStateException("أوقف الاستخراج قبل المزامنة")
         val prefs = settingsStore.get()
@@ -489,6 +533,7 @@ object ExtractionController {
         refreshStats()
         return added
             } finally {
+            syncInProgress = false
             RuntimeOperationCoordinator.release(RuntimeOperation.EXTRACTION)
         }
     }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.althmany.extractor"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2201
-        versionName = "2.20.1"
+        versionCode = 2202
+        versionName = "2.20.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

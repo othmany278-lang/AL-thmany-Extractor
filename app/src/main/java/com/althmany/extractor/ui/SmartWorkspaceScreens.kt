@@ -311,7 +311,20 @@ fun WorkspaceHomeScreen(
                     WsSectionTitle("حالة المحرك والبيئة", Icons.Default.Shield)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WsStat("Shizuku", if (engine.shizukuReady) "إذن" else "—", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
-                        WsStat("Accessibility", if (engine.serviceConnected) "متصل" else "—", if (engine.serviceConnected) WsGreen else WsDanger, Modifier.weight(1f))
+                        WsStat(
+                            "Accessibility",
+                            when {
+                                engine.serviceConnected -> "متصل"
+                                engine.accessibilityEnabledInSettings -> "مفعّل/غير مرتبط"
+                                else -> "غير مفعّل"
+                            },
+                            when {
+                                engine.serviceConnected -> WsGreen
+                                engine.accessibilityEnabledInSettings -> WsOrange
+                                else -> WsDanger
+                            },
+                            Modifier.weight(1f)
+                        )
                     }
                 }
             }
@@ -364,7 +377,20 @@ fun WorkspaceExtractionScreen(
                     WsSectionTitle("محرك التشغيل", Icons.Default.Memory)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WsStat("Shizuku", if (engine.shizukuReady) "إذن متاح — يختبر عند التشغيل" else "غير جاهز", if (engine.shizukuReady) WsGreen else WsDanger, Modifier.weight(1f))
-                        WsStat("Accessibility", if (accessibilityEnabled && engine.serviceConnected) "متاح ومفعل" else "غير متصل", if (accessibilityEnabled && engine.serviceConnected) WsGreen else WsDanger, Modifier.weight(1f))
+                        WsStat(
+                            "Accessibility",
+                            when {
+                                engine.serviceConnected -> "متاح ومفعل"
+                                engine.accessibilityEnabledInSettings -> "مفعّل وينتظر الربط"
+                                else -> "غير مفعّل"
+                            },
+                            when {
+                                engine.serviceConnected -> WsGreen
+                                engine.accessibilityEnabledInSettings -> WsOrange
+                                else -> WsDanger
+                            },
+                            Modifier.weight(1f)
+                        )
                     }
                 }
             }

@@ -5,7 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.althmany.extractor.engine.ExtractionController
@@ -13,8 +13,8 @@ import com.althmany.extractor.engine.PublishController
 import com.althmany.extractor.engine.RuntimeOperation
 import com.althmany.extractor.engine.RuntimeOperationCoordinator
 import com.althmany.extractor.engine.ScanController
-import com.althmany.extractor.profile.WhatsAppInstanceRegistry
 import com.althmany.extractor.profile.ProfileAccessibilityRuntime
+import com.althmany.extractor.profile.WhatsAppInstanceRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,44 +24,37 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/**
- * Event-first, profile-local Accessibility runtime.
- *
- * Runtime behavior is intentionally aligned with the proven AL-thmany 2.8.0 architecture:
- *  - bind the live service instance as early as onCreate;
- *  - recover from delayed onServiceConnected callbacks on the first real WhatsApp event;
- *  - route events only to the operation that currently owns the WhatsApp UI;
- *  - coalesce normal event-driven work in each controller, with a small fallback heartbeat/poll;
- *  - never control a different Android user because the bridge is process/user local.
- *
- * The extractor keeps its own three functions (Extraction / Scan / Publish).  No Join behavior is
- * copied into this service.
- */
 class WhatsAppAccessibilityService : AccessibilityService() {
     private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var fallbackPollJob: Job? = null
+    private var warmupJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
-        bindRuntime()
+        bindRuntime("onCreate")
+        startFallbackPoll()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        bindRuntime()
+        bindRuntime("onServiceConnected")
         startFallbackPoll()
+        startWarmupProbe()
+    }
+
+    override fun onRebind(intent: Intent?) {
+        super.onRebind(intent)
+        bindRuntime("onRebind")
+        startFallbackPoll()
+        startWarmupProbe()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val safeEvent = event ?: return
         val packageName = safeEvent.packageName?.toString()
-
-        // A delivered AccessibilityEvent is definitive proof that this exact service instance is
-        // alive in the current Android user/profile. This self-heals delayed Samsung callbacks.
         AccessibilityRuntimeBridge.event(this, packageName)
-        packageName?.let { ProfileAccessibilityRuntime.recordEvent(this, it) }
-        attachControllers()
-
+        packageName?.let { runCatching { ProfileAccessibilityRuntime.recordEvent(this, it) } }
+        attachControllersSafely("event")
         if (!WhatsAppInstanceRegistry.isSupportedPackage(packageName)) return
         routeEvent(packageName)
     }
@@ -79,26 +72,32 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun bindRuntime() {
+    private fun bindRuntime(source: String) {
         AccessibilityRuntimeBridge.bind(this)
-        ProfileAccessibilityRuntime.recordServiceConnected(this)
-        attachControllers()
+        runCatching { ProfileAccessibilityRuntime.recordServiceConnected(this) }
+            .onFailure { Log.w(TAG, "recordServiceConnected failed: $source", it) }
+        attachControllersSafely(source)
+    }
+
+    private fun attachControllersSafely(source: String) {
+        runCatching { ExtractionController.attachService(this) }
+            .onFailure { Log.e(TAG, "Extraction attach failed: $source", it) }
+        runCatching { ScanController.attachService(this) }
+            .onFailure { Log.e(TAG, "Scan attach failed: $source", it) }
+        runCatching { PublishController.attachService(this) }
+            .onFailure { Log.e(TAG, "Publish attach failed: $source", it) }
     }
 
     private fun detachRuntime() {
         fallbackPollJob?.cancel()
         fallbackPollJob = null
+        warmupJob?.cancel()
+        warmupJob = null
         AccessibilityRuntimeBridge.unbind(this)
-        ProfileAccessibilityRuntime.markDisconnected(this)
-        ExtractionController.detachService(this)
-        ScanController.detachService(this)
-        PublishController.detachService(this)
-    }
-
-    private fun attachControllers() {
-        ExtractionController.attachService(this)
-        ScanController.attachService(this)
-        PublishController.attachService(this)
+        runCatching { ProfileAccessibilityRuntime.markDisconnected(this) }
+        runCatching { ExtractionController.detachService(this) }
+        runCatching { ScanController.detachService(this) }
+        runCatching { PublishController.detachService(this) }
     }
 
     private fun routeEvent(packageName: String?) {
@@ -110,23 +109,55 @@ class WhatsAppAccessibilityService : AccessibilityService() {
                 ExtractionController.isBusy() -> ExtractionController.notifyUiEvent(packageName)
                 ScanController.isRunning() -> ScanController.notifyUiEvent(packageName)
                 PublishController.isRunning() -> PublishController.notifyUiEvent(packageName)
-                else -> ExtractionController.notifyUiEvent(packageName) // enables group sync wakeups
+                else -> ExtractionController.notifyUiEvent(packageName)
             }
         }
     }
 
-    /**
-     * Event-first remains authoritative. This is only a liveness fallback like the 2.8.0 poll path:
-     * if WhatsApp changes without emitting a useful event, the active engine still gets a wake-up.
-     */
+    private fun startWarmupProbe() {
+        warmupJob?.cancel()
+        warmupJob = runtimeScope.launch {
+            repeat(24) {
+                if (!isActive) return@launch
+                AccessibilityRuntimeBridge.heartbeat()
+                runCatching {
+                    ProfileAccessibilityRuntime.heartbeat(
+                        this@WhatsAppAccessibilityService,
+                        force = true
+                    )
+                }
+                attachControllersSafely("warmup")
+                val root = rootInActiveWindow
+                runCatching {
+                    ProfileAccessibilityRuntime.recordRoot(
+                        this@WhatsAppAccessibilityService,
+                        root != null,
+                        root?.packageName?.toString()
+                    )
+                }
+                if (root != null) return@launch
+                delay(250L)
+            }
+        }
+    }
+
     private fun startFallbackPoll() {
         fallbackPollJob?.cancel()
         fallbackPollJob = runtimeScope.launch {
             while (isActive) {
                 delay(FALLBACK_POLL_MS)
                 AccessibilityRuntimeBridge.heartbeat()
-                val pkg = rootInActiveWindow?.packageName?.toString()
+                val root = rootInActiveWindow
+                runCatching {
+                    ProfileAccessibilityRuntime.recordRoot(
+                        this@WhatsAppAccessibilityService,
+                        root != null,
+                        root?.packageName?.toString()
+                    )
+                }
+                val pkg = root?.packageName?.toString()
                 if (WhatsAppInstanceRegistry.isSupportedPackage(pkg)) {
+                    attachControllersSafely("poll")
                     routeEvent(pkg)
                 }
             }
@@ -135,60 +166,56 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     fun currentRoot(): AccessibilityNodeInfo? {
         AccessibilityRuntimeBridge.heartbeat()
-        ProfileAccessibilityRuntime.heartbeat(this)
+        runCatching { ProfileAccessibilityRuntime.heartbeat(this) }
         val root = rootInActiveWindow
-        ProfileAccessibilityRuntime.recordRoot(this, root != null, root?.packageName?.toString())
+        runCatching {
+            ProfileAccessibilityRuntime.recordRoot(this, root != null, root?.packageName?.toString())
+        }
         return root
     }
 
     fun performBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
 
-    /** Tap fallback for WhatsApp nodes whose Accessibility ACTION_CLICK is not exposed. */
     fun tapBounds(bounds: Rect?, durationMs: Long = 72L): Boolean {
         val b = bounds ?: return false
         if (b.width() <= 0 || b.height() <= 0) return false
-        val x = b.exactCenterX()
-        val y = b.exactCenterY()
-        val path = Path().apply { moveTo(x, y) }
+        val path = Path().apply { moveTo(b.exactCenterX(), b.exactCenterY()) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(48L, 180L)))
+            .addStroke(
+                GestureDescription.StrokeDescription(
+                    path, 0, durationMs.coerceIn(48L, 180L)
+                )
+            )
             .build()
         return dispatchGesture(gesture, null, null)
     }
 
-    /** Gesture fallback for WhatsApp builds whose message RecyclerView does not expose ACTION_SCROLL_BACKWARD. */
     fun swipeTowardOlderMessages(durationMs: Long): Boolean {
         val dm = resources.displayMetrics
-        val x = dm.widthPixels * 0.52f
-        val fromY = dm.heightPixels * 0.34f
-        val toY = dm.heightPixels * 0.78f
-        return dispatchSwipe(x, fromY, x, toY, durationMs)
+        return dispatchSwipe(
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.34f,
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.78f, durationMs
+        )
     }
 
-    /** Gesture fallback for moving down through the main chat list during synchronization. */
     fun swipeChatListForward(durationMs: Long): Boolean {
         val dm = resources.displayMetrics
-        val x = dm.widthPixels * 0.52f
-        val fromY = dm.heightPixels * 0.78f
-        val toY = dm.heightPixels * 0.28f
-        return dispatchSwipe(x, fromY, x, toY, durationMs)
+        return dispatchSwipe(
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.78f,
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.28f, durationMs
+        )
     }
 
-    /** Gesture fallback for restoring the chat list toward the position visible before sync. */
     fun swipeChatListBackward(durationMs: Long): Boolean {
         val dm = resources.displayMetrics
-        val x = dm.widthPixels * 0.52f
-        val fromY = dm.heightPixels * 0.30f
-        val toY = dm.heightPixels * 0.78f
-        return dispatchSwipe(x, fromY, x, toY, durationMs)
+        return dispatchSwipe(
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.30f,
+            dm.widthPixels * 0.52f, dm.heightPixels * 0.78f, durationMs
+        )
     }
 
     private fun dispatchSwipe(
-        fromX: Float,
-        fromY: Float,
-        toX: Float,
-        toY: Float,
-        durationMs: Long
+        fromX: Float, fromY: Float, toX: Float, toY: Float, durationMs: Long
     ): Boolean {
         val path = Path().apply {
             moveTo(fromX, fromY)
@@ -197,9 +224,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(
                 GestureDescription.StrokeDescription(
-                    path,
-                    0,
-                    durationMs.coerceIn(72L, 900L)
+                    path, 0, durationMs.coerceIn(72L, 900L)
                 )
             )
             .build()
@@ -207,6 +232,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val TAG = "ALthmanyAccessibility"
         private const val FALLBACK_POLL_MS = 95L
     }
 }
