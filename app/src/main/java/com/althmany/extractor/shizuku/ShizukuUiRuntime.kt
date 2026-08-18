@@ -75,6 +75,46 @@ internal class ShizukuUiRuntime(private val context: Context) {
     private val linksPatterns = listOf("الروابط", "روابط", "Links")
     private val olderPatterns = listOf("مشاهدة الرسائل الأقدم", "تحميل الرسائل الأقدم", "Load older messages", "View older messages", "Tap here to load older messages")
     private val unreadPatterns = listOf("رسائل غير مقروءة", "Unread messages", "Unread message")
+    private val inviteJoinLabels = listOf(
+        "الانضمام إلى المجموعة", "الانضمام الى المجموعة", "الانضمام للمجموعة",
+        "انضم إلى المجموعة", "انضم الى المجموعة", "انضم للمجموعة",
+        "الانضمام إلى القروب", "الانضمام الى القروب", "انضم إلى القروب", "انضم الى القروب", "انضم للقروب",
+        "الانضمام إلى المجتمع", "الانضمام الى المجتمع", "الانضمام للمجتمع",
+        "انضم إلى المجتمع", "انضم الى المجتمع", "انضم للمجتمع",
+        "Join group", "Join the group", "Join this group", "Join group now",
+        "Join this chat", "Join this group now",
+        "Join community", "Join this community", "Join the community",
+        "Join community now", "Join this community now", "Join community chat"
+    )
+    private val inviteRequestLabels = listOf(
+        "طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام الى المجموعة", "طلب الانضمام للمجموعة",
+        "إرسال طلب الانضمام", "ارسال طلب الانضمام", "طلب للانضمام",
+        "Request to join", "Send request", "Request to join group",
+        "Request membership", "Request group access", "Ask for access", "Send request to join",
+        "Request to join community", "Ask to join community", "Request community access"
+    )
+    private val inviteConfirmationLabels = listOf(
+        "متابعة", "تابع", "تأكيد", "تاكيد", "تأكيد الانضمام", "تاكيد الانضمام",
+        "موافق", "نعم", "استمرار",
+        "Continue", "Confirm", "Confirm join", "Continue to join", "Continue joining",
+        "Proceed", "Yes", "OK", "Okay"
+    )
+    private val inviteCloseLabels = listOf("إغلاق", "اغلاق", "Close", "Dismiss")
+    private val inviteJoinIds = listOf(
+        "join_group", "group_join", "group_join_button", "join_group_button",
+        "join_community", "community_join", "community_join_button", "join_community_button"
+    )
+    private val inviteRequestIds = listOf(
+        "request_join", "request_to_join", "join_request", "send_join_request",
+        "request_community", "community_request",
+        "request_join_button", "request_to_join_button", "join_request_button",
+        "send_join_request_button", "request_community_button", "community_request_button"
+    )
+    private val inviteConfirmationIds = listOf(
+        "confirm_button", "confirmation_button", "continue_button",
+        "join_confirm_button", "positive_button"
+    )
+    private val inviteCloseIds = listOf("close", "close_button", "dismiss_button", "cancel_button")
     private val chromeBlacklist = setOf(
         "الكل", "all", "غير مقروءة", "unread", "المفضلة", "favourites", "favorites", "المجموعات", "groups",
         "مؤرشفة", "archived", "المجتمعات", "communities", "الحالات", "updates", "المكالمات", "calls", "الدردشات", "chats",
@@ -243,8 +283,56 @@ internal class ShizukuUiRuntime(private val context: Context) {
 
     suspend fun clickSend(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, listOf("إرسال", "Send"), preferBottom = true)
     suspend fun clickPositiveAction(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, listOf("إرسال", "Send", "التالي", "Next", "تم", "Done", "مشاركة", "Share"), preferBottom = true)
-    suspend fun clickInviteAction(tree: ShizukuUiTree, packageName: String, approval: Boolean): Boolean = clickPattern(tree, packageName, if (approval) listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community"), preferBottom = true)
-    fun inviteActionAvailable(tree: ShizukuUiTree, approval: Boolean): Boolean = findPattern(tree, if (approval) listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "Request to join", "Send request") else listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community")) != null
+    private fun findInviteAction(tree: ShizukuUiTree, approval: Boolean): ShizukuUiNode? {
+        val labels = if (approval) inviteRequestLabels else inviteJoinLabels
+        val ids = if (approval) inviteRequestIds else inviteJoinIds
+        return tree.nodes.filter { it.enabled && (
+            labels.any { p -> it.label.contains(p, true) } ||
+                ids.any { id -> it.viewId.contains(id, true) }
+        ) }.maxByOrNull { it.bounds.bottom }
+    }
+
+    suspend fun clickInviteAction(tree: ShizukuUiTree, packageName: String, approval: Boolean): Boolean {
+        val node = findInviteAction(tree, approval) ?: return false
+        return clickNode(tree, node, packageName)
+    }
+
+    fun inviteActionAvailable(tree: ShizukuUiTree, approval: Boolean): Boolean =
+        findInviteAction(tree, approval) != null
+
+    private fun findInviteConfirmation(tree: ShizukuUiTree): ShizukuUiNode? =
+        tree.nodes.filter { it.enabled && (
+            inviteConfirmationLabels.any { p -> it.label.contains(p, true) } ||
+                inviteConfirmationIds.any { id -> it.viewId.contains(id, true) }
+        ) }.maxByOrNull { it.bounds.bottom }
+
+    fun inviteConfirmationAvailable(tree: ShizukuUiTree): Boolean =
+        findInviteConfirmation(tree) != null
+
+    suspend fun clickInviteConfirmation(tree: ShizukuUiTree, packageName: String): Boolean {
+        val node = findInviteConfirmation(tree) ?: return false
+        return clickNode(tree, node, packageName)
+    }
+
+    suspend fun clickInviteClose(tree: ShizukuUiTree, packageName: String): Boolean {
+        val node = tree.nodes.filter { it.enabled && (
+            inviteCloseLabels.any { p -> it.label.contains(p, true) } ||
+                inviteCloseIds.any { id -> it.viewId.contains(id, true) }
+        ) }.minByOrNull { it.bounds.top } ?: return false
+        return clickNode(tree, node, packageName)
+    }
+
+    suspend fun shellClickInviteAction(packageName: String, approval: Boolean): Boolean {
+        val labels = if (approval) inviteRequestLabels else inviteJoinLabels
+        val ids = if (approval) inviteRequestIds else inviteJoinIds
+        val action = ShizukuBridge.shellFindUiAction(context, packageName, labels, ids)
+        return action.found && ShizukuBridge.profileSafeTap(context, packageName, action.x, action.y)
+    }
+
+    suspend fun shellClickInviteConfirmation(packageName: String): Boolean {
+        val action = ShizukuBridge.shellFindUiAction(context, packageName, inviteConfirmationLabels, inviteConfirmationIds)
+        return action.found && ShizukuBridge.profileSafeTap(context, packageName, action.x, action.y)
+    }
 
     suspend fun openMediaLinks(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, mediaPatterns, preferTop = false)
     suspend fun openLinksTab(tree: ShizukuUiTree, packageName: String): Boolean = clickPattern(tree, packageName, linksPatterns, preferTop = true)
@@ -269,7 +357,8 @@ internal class ShizukuUiRuntime(private val context: Context) {
     private suspend fun clickNode(tree: ShizukuUiTree, node: ShizukuUiNode, packageName: String): Boolean {
         val candidate = tree.ancestors(node).firstOrNull { it.clickable && it.enabled } ?: node
         if (ShizukuBridge.fastClickNode(context, packageName, candidate.centerX, candidate.centerY)) return true
-        return ShizukuBridge.fastTap(context, candidate.centerX, candidate.centerY)
+        if (ShizukuBridge.fastTap(context, candidate.centerX, candidate.centerY)) return true
+        return ShizukuBridge.profileSafeTap(context, packageName, candidate.centerX, candidate.centerY)
     }
 
     private fun parse(result: ShizukuBridge.FastUiResult): ShizukuUiTree {

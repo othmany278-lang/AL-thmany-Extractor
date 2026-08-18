@@ -33,6 +33,49 @@ class WhatsAppUiAdapter {
     )
     private val unreadPatterns = listOf("رسائل غير مقروءة", "رسالة غير مقروءة", "Unread messages", "Unread message")
     private val archivedPatterns = listOf("مؤرشفة", "المؤرشفة", "Archived")
+    private val inviteJoinLabels = listOf(
+        "الانضمام إلى المجموعة", "الانضمام الى المجموعة", "الانضمام للمجموعة",
+        "انضم إلى المجموعة", "انضم الى المجموعة", "انضم للمجموعة",
+        "الانضمام إلى القروب", "الانضمام الى القروب", "انضم إلى القروب", "انضم الى القروب", "انضم للقروب",
+        "الانضمام إلى المجتمع", "الانضمام الى المجتمع", "الانضمام للمجتمع",
+        "انضم إلى المجتمع", "انضم الى المجتمع", "انضم للمجتمع",
+        "Join group", "Join the group", "Join this group", "Join group now",
+        "Join this chat", "Join this group now",
+        "Join community", "Join this community", "Join the community",
+        "Join community now", "Join this community now", "Join community chat"
+    )
+    private val inviteRequestLabels = listOf(
+        "طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام الى المجموعة", "طلب الانضمام للمجموعة",
+        "إرسال طلب الانضمام", "ارسال طلب الانضمام", "طلب للانضمام",
+        "طلب الانضمام إلى القروب", "طلب الانضمام الى القروب", "طلب الانضمام للقروب",
+        "اطلب الانضمام إلى المجموعة", "اطلب الانضمام الى المجموعة", "اطلب الانضمام للمجموعة",
+        "اطلب الانضمام إلى المجتمع", "اطلب الانضمام الى المجتمع", "اطلب الانضمام للمجتمع",
+        "Request to join", "Send request", "Request to join group",
+        "Request membership", "Request group access", "Ask for access", "Send request to join",
+        "Request to join community", "Ask to join community", "Request community access"
+    )
+    private val inviteConfirmationLabels = listOf(
+        "متابعة", "تابع", "تأكيد", "تاكيد", "تأكيد الانضمام", "تاكيد الانضمام",
+        "موافق", "نعم", "استمرار",
+        "Continue", "Confirm", "Confirm join", "Continue to join", "Continue joining",
+        "Proceed", "Yes", "OK", "Okay"
+    )
+    private val inviteCloseLabels = listOf("إغلاق", "اغلاق", "Close", "Dismiss")
+    private val inviteJoinIds = listOf(
+        "join_group", "group_join", "group_join_button", "join_group_button",
+        "join_community", "community_join", "community_join_button", "join_community_button"
+    )
+    private val inviteRequestIds = listOf(
+        "request_join", "request_to_join", "join_request", "send_join_request",
+        "request_community", "community_request",
+        "request_join_button", "request_to_join_button", "join_request_button",
+        "send_join_request_button", "request_community_button", "community_request_button"
+    )
+    private val inviteConfirmationIds = listOf(
+        "confirm_button", "confirmation_button", "continue_button",
+        "join_confirm_button", "positive_button"
+    )
+    private val inviteCloseIds = listOf("close", "close_button", "dismiss_button", "cancel_button")
 
     private val terminalPatterns = listOf(
         Triple("phone-history-limit", "استخدم هاتفك الآخر لتحميل بقية الرسائل", true),
@@ -554,25 +597,49 @@ class WhatsAppUiAdapter {
     fun currentChatHeaderBounds(root: AccessibilityNodeInfo?, groupName: String): Rect? =
         currentChatHeaderNode(root, groupName)?.let { Rect().also(it::getBoundsInScreen) }
 
-    fun inviteActionAvailable(root: AccessibilityNodeInfo?, approval: Boolean): Boolean {
-        val labels = if (approval) {
-            listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "طلب للانضمام", "Request to join", "Send request", "Request to join group")
-        } else {
-            listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضمام إلى المجموعة", "انضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community")
+    private fun findInviteActionNode(root: AccessibilityNodeInfo?, approval: Boolean): AccessibilityNodeInfo? {
+        if (root == null) return null
+        val ids = if (approval) inviteRequestIds else inviteJoinIds
+        findByKnownIds(root, ids)?.let { node ->
+            if (node.isVisibleToUser && node.isEnabled && hasClickableSelfOrAncestor(node)) return node
         }
-        val node = findVisibleNodeByPatterns(root, labels) ?: return false
-        return hasClickableSelfOrAncestor(node)
+        val labels = if (approval) inviteRequestLabels else inviteJoinLabels
+        return findVisibleNodeByPatterns(root, labels)
+            ?.takeIf { it.isVisibleToUser && it.isEnabled && hasClickableSelfOrAncestor(it) }
     }
 
+    fun inviteActionAvailable(root: AccessibilityNodeInfo?, approval: Boolean): Boolean =
+        findInviteActionNode(root, approval) != null
+
     fun clickInviteAction(root: AccessibilityNodeInfo?, approval: Boolean): Boolean {
-        val labels = if (approval) {
-            listOf("طلب الانضمام", "طلب الانضمام إلى المجموعة", "طلب الانضمام للمجموعة", "إرسال طلب الانضمام", "طلب للانضمام", "Request to join", "Send request", "Request to join group")
-        } else {
-            listOf("الانضمام إلى المجموعة", "الانضمام للمجموعة", "انضمام إلى المجموعة", "انضمام للمجموعة", "انضم إلى المجموعة", "الانضمام إلى المجتمع", "انضمام إلى المجتمع", "Join group", "Join this group", "Join community")
-        }
-        val node = findVisibleNodeByPatterns(root, labels) ?: return false
-        if (!hasClickableSelfOrAncestor(node)) return false
+        val node = findInviteActionNode(root, approval) ?: return false
         return clickNodeOrParent(node)
+    }
+
+    private fun findInviteConfirmationNode(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (root == null) return null
+        findByKnownIds(root, inviteConfirmationIds)?.let { node ->
+            if (node.isVisibleToUser && node.isEnabled && hasClickableSelfOrAncestor(node)) return node
+        }
+        return findVisibleNodeByPatterns(root, inviteConfirmationLabels)
+            ?.takeIf { it.isVisibleToUser && it.isEnabled && hasClickableSelfOrAncestor(it) }
+    }
+
+    fun inviteConfirmationAvailable(root: AccessibilityNodeInfo?): Boolean =
+        findInviteConfirmationNode(root) != null
+
+    fun clickInviteConfirmation(root: AccessibilityNodeInfo?): Boolean {
+        val node = findInviteConfirmationNode(root) ?: return false
+        return clickNodeOrParent(node)
+    }
+
+    fun clickInviteClose(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        findByKnownIds(root, inviteCloseIds)?.let { node ->
+            if (node.isVisibleToUser && node.isEnabled && clickNodeOrParent(node)) return true
+        }
+        val node = findVisibleNodeByPatterns(root, inviteCloseLabels) ?: return false
+        return node.isEnabled && hasClickableSelfOrAncestor(node) && clickNodeOrParent(node)
     }
 
     fun scrollChatListForward(root: AccessibilityNodeInfo?): Boolean {

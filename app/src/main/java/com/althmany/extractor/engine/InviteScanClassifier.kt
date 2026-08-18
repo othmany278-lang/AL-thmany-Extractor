@@ -51,10 +51,24 @@ object InviteScanClassifier {
             "cancel request", "request sent", "request pending", "your request is pending"
         ), "يوجد طلب انضمام مرسل بالفعل", 100),
         Rule(ScanStatus.APPROVAL, "APPROVAL_REQUIRED", listOf(
-            "طلب الانضمام", "إرسال طلب الانضمام", "طلب للانضمام", "request to join", "send request", "request to join group"
+            "طلب الانضمام", "إرسال طلب الانضمام", "ارسال طلب الانضمام", "طلب للانضمام",
+            "طلب الانضمام إلى القروب", "طلب الانضمام الى القروب", "طلب الانضمام للقروب",
+            "اطلب الانضمام إلى المجموعة", "اطلب الانضمام الى المجموعة", "اطلب الانضمام للمجموعة",
+            "اطلب الانضمام إلى المجتمع", "اطلب الانضمام الى المجتمع", "اطلب الانضمام للمجتمع",
+            "طلب دخول", "request to join", "send request", "request to join group",
+            "request membership", "request group access", "ask for access", "send request to join",
+            "request to join community", "ask to join community", "request community access"
         ), "الانضمام يحتاج موافقة المشرف", 99),
         Rule(ScanStatus.DIRECT, "DIRECT_JOIN", listOf(
-            "الانضمام إلى المجموعة", "انضمام إلى المجموعة", "انضم إلى المجموعة", "join group", "join this group"
+            "الانضمام إلى المجموعة", "الانضمام الى المجموعة", "الانضمام للمجموعة",
+            "انضمام إلى المجموعة", "انضمام الى المجموعة", "انضم إلى المجموعة", "انضم الى المجموعة", "انضم للمجموعة",
+            "الانضمام إلى القروب", "الانضمام الى القروب", "انضم إلى القروب", "انضم الى القروب", "انضم للقروب",
+            "الانضمام إلى المجتمع", "الانضمام الى المجتمع", "الانضمام للمجتمع",
+            "انضم إلى المجتمع", "انضم الى المجتمع", "انضم للمجتمع",
+            "join group", "join the group", "join this group", "join group now",
+            "join this chat", "join this group now",
+            "join community", "join this community", "join the community",
+            "join community now", "join this community now", "join community chat"
         ), "الرابط يتيح الانضمام المباشر", 99),
         Rule(ScanStatus.ALREADY_MEMBER, "ALREADY_MEMBER", listOf(
             "أنت عضو بالفعل", "أنت بالفعل عضو", "فتح المجموعة", "عرض المجموعة",

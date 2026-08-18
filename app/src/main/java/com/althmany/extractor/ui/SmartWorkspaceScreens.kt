@@ -495,6 +495,7 @@ fun WorkspaceScanScreen(
     onTargetWhatsApp: (String) -> Unit,
     onAddLinks: (String) -> Unit,
     onImportExtraction: () -> Unit,
+    onImportFile: () -> Unit,
     onAction: (ScanActionMode) -> Unit,
     onSpeed: (ScanSpeedProfile) -> Unit,
     onAttempts: (Int) -> Unit,
@@ -534,9 +535,29 @@ fun WorkspaceScanScreen(
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = WsGreen, unfocusedBorderColor = WsLine, focusedTextColor = WsText, unfocusedTextColor = WsText),
                         shape = RoundedCornerShape(14.dp)
                     )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onAddLinks(text); text = "" }, enabled = text.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = WsGreen, contentColor = Color.Black)) { Icon(Icons.Default.Add, null); Text("إضافة للفحص") }
-                        OutlinedButton(onClick = onImportExtraction, modifier = Modifier.weight(1f), border = BorderStroke(1.dp, WsGreen)) { Icon(Icons.Default.Download, null, tint = WsGreen); Text("من الاستخراج", color = WsText) }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            Button(
+                                onClick = { onAddLinks(text); text = "" },
+                                enabled = text.isNotBlank(),
+                                modifier = Modifier.width(138.dp).height(50.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = WsGreen, contentColor = Color.Black)
+                            ) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("الروابط الملصوقة", fontSize = 9.sp) }
+                        }
+                        item {
+                            OutlinedButton(
+                                onClick = onImportFile,
+                                modifier = Modifier.width(138.dp).height(50.dp),
+                                border = BorderStroke(1.dp, WsCyan)
+                            ) { Icon(Icons.Default.TableChart, null, tint = WsCyan); Spacer(Modifier.width(4.dp)); Text("ملف Excel", color = WsText, fontSize = 9.sp) }
+                        }
+                        item {
+                            OutlinedButton(
+                                onClick = onImportExtraction,
+                                modifier = Modifier.width(138.dp).height(50.dp),
+                                border = BorderStroke(1.dp, WsGreen)
+                            ) { Icon(Icons.Default.Download, null, tint = WsGreen); Spacer(Modifier.width(4.dp)); Text("من الاستخراج", color = WsText, fontSize = 9.sp) }
+                        }
                     }
                 }
             }

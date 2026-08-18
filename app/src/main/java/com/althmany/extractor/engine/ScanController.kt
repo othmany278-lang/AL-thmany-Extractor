@@ -55,6 +55,8 @@ object ScanController {
     private var service: WhatsAppAccessibilityService? = null
     private var job: Job? = null
     @Volatile private var pauseRequested = false
+    private const val POST_ACTION_GRACE_MS = 650L
+    private const val MAX_POSITIVE_FOLLOW_UPS = 2
 
     private val _state = MutableStateFlow(ScanUiState())
     val state: StateFlow<ScanUiState> = _state.asStateFlow()
@@ -365,7 +367,7 @@ object ScanController {
                     notifier.show(_state.value)
                 }
                 safelyReturnFromInvite(speed)
-                delay(speed.settleDelayMs)
+                // Event-first: انتقل للرابط التالي بدون Delay صناعي ثانٍ.
             }
 
             _state.value = _state.value.copy(
@@ -547,27 +549,19 @@ object ScanController {
             definitive = true
         )
         val root = svc.currentRoot()
-        if (!adapter.inviteActionAvailable(root, approval)) {
-            return decision.copy(
-                status = ScanStatus.ACTION_UNCERTAIN,
-                detail = "الحالة واضحة لكن زر الإجراء لم يعد متاحًا عند التنفيذ؛ لن يعاد الضغط تلقائيًا",
-                signalCode = "ACTION_BUTTON_GONE",
-                definitive = true
-            )
-        }
-
         _state.value = _state.value.copy(
             status = ScanEngineStatus.CLASSIFYING,
-            message = if (approval) "تنفيذ طلب الانضمام ثم التحقق" else "تنفيذ الانضمام ثم التحقق"
+            message = if (approval) "طلب الانضمام • تنفيذ ثم متابعة نفس الرابط" else "الانضمام • تنفيذ ثم متابعة نفس الرابط"
         )
-        if (!adapter.clickInviteAction(root, approval)) {
+        if (!adapter.inviteActionAvailable(root, approval) || !adapter.clickInviteAction(root, approval)) {
             return decision.copy(
                 status = ScanStatus.ACTION_UNCERTAIN,
-                detail = "تعذر تأكيد ضغط زر الإجراء؛ لن يعاد الضغط تلقائيًا",
-                signalCode = "ACTION_CLICK_UNCERTAIN",
+                detail = "لم يتم العثور على زر الإجراء أو تعذر ضغطه عبر Accessibility",
+                signalCode = "ACTION_SEMANTIC_CLICK_FAILED",
                 definitive = true
             )
         }
+        delay(POST_ACTION_GRACE_MS)
 
         val deadline = SystemClock.uptimeMillis() + when (speed) {
             ScanSpeedProfile.HYPER -> 3_500L
@@ -575,10 +569,20 @@ object ScanController {
             ScanSpeedProfile.SAFE -> 7_000L
         }
         var bestPost = decision
+        var positiveFollowUps = 0
         while (SystemClock.uptimeMillis() < deadline) {
             waitIfPaused()
             val current = svc.currentRoot()
             if (current != null && adapter.isWhatsAppRoot(current, packageName)) {
+                if (positiveFollowUps < MAX_POSITIVE_FOLLOW_UPS &&
+                    adapter.inviteConfirmationAvailable(current) &&
+                    adapter.clickInviteConfirmation(current)
+                ) {
+                    positiveFollowUps++
+                    _state.value = _state.value.copy(message = "Continue/Confirm على نفس الرابط • $positiveFollowUps/$MAX_POSITIVE_FOLLOW_UPS")
+                    delay(POST_ACTION_GRACE_MS)
+                    continue
+                }
                 val post = InviteScanClassifier.classify(adapter.snapshot(current).texts)
                 bestPost = chooseBetter(bestPost, post)
                 if (!approval) {
@@ -685,16 +689,47 @@ object ScanController {
         val approval=decision.status==ScanStatus.APPROVAL;val direct=decision.status==ScanStatus.DIRECT
         if(!approval&&!direct)return decision
         if(approval&&!_state.value.requestToJoinEnabled)return decision.copy(detail="${decision.detail} — إرسال طلب الانضمام معطل",signalCode="APPROVAL_ACTION_DISABLED")
-        var tree=awaitShizukuTree(packageName,900L)?:return decision.copy(status=ScanStatus.ERROR,detail="Shizuku لا يرى واجهة الدعوة",signalCode="SHIZUKU_NO_UI",definitive=true)
-        if(!shizukuUi.inviteActionAvailable(tree,approval))return decision.copy(status=ScanStatus.ACTION_UNCERTAIN,detail="الحالة واضحة لكن زر الإجراء غير متاح",signalCode="ACTION_BUTTON_GONE",definitive=true)
-        _state.value=_state.value.copy(message=if(approval)"Shizuku: إرسال طلب الانضمام" else "Shizuku: تنفيذ الانضمام")
-        if(!shizukuUi.clickInviteAction(tree,packageName,approval))return decision.copy(status=ScanStatus.ACTION_UNCERTAIN,detail="Shizuku لم يثبت ضغط زر الإجراء",signalCode="ACTION_CLICK_UNCERTAIN",definitive=true)
+        var tree=awaitShizukuTree(packageName,900L)
+        _state.value=_state.value.copy(message=if(approval)"Shizuku: طلب انضمام • UI ثم shell fallback" else "Shizuku: انضمام • UI ثم shell fallback")
+        val firstAction = when {
+            tree != null && shizukuUi.inviteActionAvailable(tree,approval) &&
+                shizukuUi.clickInviteAction(tree,packageName,approval) -> true
+            else -> shizukuUi.shellClickInviteAction(packageName,approval)
+        }
+        if(!firstAction)return decision.copy(
+            status=ScanStatus.ACTION_UNCERTAIN,
+            detail="لم ينجح UIAutomation أو shell semantic fallback",
+            signalCode="SHIZUKU_ACTION_ALL_LANES_FAILED",
+            definitive=true
+        )
+        delay(POST_ACTION_GRACE_MS)
         val deadline=SystemClock.uptimeMillis()+when(speed){ScanSpeedProfile.HYPER->3500L;ScanSpeedProfile.ADAPTIVE->5000L;ScanSpeedProfile.SAFE->7000L}
         var best=decision
+        var positiveFollowUps=0
         while(SystemClock.uptimeMillis()<deadline){
-            tree=awaitShizukuTree(packageName,600L)?:tree
-            val post=InviteScanClassifier.classify(tree.texts);best=chooseBetter(best,post)
-            if(!approval){val chat=decision.groupName?.let{shizukuUi.isConversationOpenForTarget(tree,it,packageName)}==true;if(post.status==ScanStatus.ALREADY_MEMBER||chat)return decision.copy(status=ScanStatus.JOINED,detail="تم الانضمام والتحقق عبر Shizuku",signalCode="JOIN_VERIFIED",confidence=100,definitive=true)}
+            val fresh=awaitShizukuTree(packageName,600L)
+            if(fresh!=null)tree=fresh
+            val currentTree=tree
+            if(currentTree==null){
+                if(positiveFollowUps<1 && shizukuUi.shellClickInviteConfirmation(packageName)){
+                    positiveFollowUps++
+                    delay(POST_ACTION_GRACE_MS)
+                    continue
+                }
+                delay(speed.settleDelayMs)
+                continue
+            }
+            if(positiveFollowUps<MAX_POSITIVE_FOLLOW_UPS &&
+                shizukuUi.inviteConfirmationAvailable(currentTree) &&
+                shizukuUi.clickInviteConfirmation(currentTree,packageName)
+            ){
+                positiveFollowUps++
+                _state.value=_state.value.copy(message="Shizuku: Continue/Confirm على نفس الرابط • $positiveFollowUps/$MAX_POSITIVE_FOLLOW_UPS")
+                delay(POST_ACTION_GRACE_MS)
+                continue
+            }
+            val post=InviteScanClassifier.classify(currentTree.texts);best=chooseBetter(best,post)
+            if(!approval){val chat=decision.groupName?.let{shizukuUi.isConversationOpenForTarget(currentTree,it,packageName)}==true;if(post.status==ScanStatus.ALREADY_MEMBER||chat)return decision.copy(status=ScanStatus.JOINED,detail="تم الانضمام والتحقق عبر Shizuku",signalCode="JOIN_VERIFIED",confidence=100,definitive=true)}
             else if(post.status==ScanStatus.REQUEST_PENDING)return post.copy(detail="تم إرسال الطلب والتحقق عبر Shizuku",signalCode="REQUEST_VERIFIED",confidence=100,definitive=true,groupName=post.groupName?:decision.groupName,memberCountText=post.memberCountText?:decision.memberCountText,inviteKind=if(post.inviteKind==InviteKind.UNKNOWN)decision.inviteKind else post.inviteKind)
             if(post.status in setOf(ScanStatus.INVALID,ScanStatus.FULL,ScanStatus.REMOVED,ScanStatus.ACCOUNT_LIMIT))return post
             delay(speed.settleDelayMs)
@@ -718,17 +753,34 @@ object ScanController {
     }.getOrDefault(false)
 
     private suspend fun safelyReturnFromInvite(speed: ScanSpeedProfile) {
+        val packageName = ExtractionController.state.value.selectedWhatsAppPackage ?: return
         if (shizukuMode) {
-            repeat(2) { ShizukuBridge.fastBack(appContext); delay(speed.settleDelayMs + 25L) }
+            val tree = awaitShizukuTree(packageName, 350L)
+            if (tree != null && shizukuUi.clickInviteClose(tree, packageName)) {
+                delay(maxOf(speed.settleDelayMs, 18L))
+                return
+            }
+            ShizukuBridge.fastBack(appContext)
+            delay(maxOf(speed.settleDelayMs, 18L))
+            val after = awaitShizukuTree(packageName, 350L)
+            if (after == null || !shizukuUi.isWhatsApp(after, packageName)) {
+                ShizukuBridge.launchPackage(appContext, packageName)
+            }
             return
         }
-        val svc = service ?: return
-        repeat(2) {
-            val root = svc.currentRoot() ?: return@repeat
-            val pkg = root.packageName?.toString()
-            if (!WhatsAppInstanceRegistry.isSupportedPackage(pkg)) return
-            svc.performBack()
-            delay(speed.settleDelayMs + 25L)
+        val svc = service ?: recoverLiveService() ?: return
+        val root = svc.currentRoot()
+        if (root != null && adapter.isWhatsAppRoot(root, packageName) && adapter.clickInviteClose(root)) {
+            withTimeoutOrNull(speed.eventWaitMs) { uiEvents.first() }
+            delay(maxOf(speed.settleDelayMs, 18L))
+            return
+        }
+        svc.performBack()
+        withTimeoutOrNull(speed.eventWaitMs) { uiEvents.first() }
+        delay(maxOf(speed.settleDelayMs, 18L))
+        val after = svc.currentRoot()
+        if (after == null || !adapter.isWhatsAppRoot(after, packageName)) {
+            ExtractionController.openWhatsApp()
         }
     }
 

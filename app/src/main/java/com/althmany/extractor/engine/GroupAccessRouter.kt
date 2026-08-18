@@ -52,6 +52,7 @@ class GroupAccessRouter(private val adapter: WhatsAppUiAdapter) {
         cachedNonSearch.forEach { priority += it }
         priority += GroupAccessMethod.VISIBLE_LIST
         priority += GroupAccessMethod.SCROLL_MATCH
+        // Search is a last-resort compatibility fallback only after memory/list/scroll routes fail.
         if (allowSearchFallback) priority += GroupAccessMethod.SEARCH_FALLBACK
 
         for (method in priority) {

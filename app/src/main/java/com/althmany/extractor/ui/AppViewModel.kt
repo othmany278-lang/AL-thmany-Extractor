@@ -394,6 +394,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importScanFile(uri: android.net.Uri) {
+        if (globalJob?.isActive == true) return
+        viewModelScope.launch {
+            val links = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.althmany.extractor.engine.ScanInputImporter.readLinks(
+                        getApplication<Application>().contentResolver,
+                        uri
+                    )
+                }
+            }.getOrElse {
+                _message.value = "FILE_IMPORT_FAILED: ${it.message ?: "تعذر قراءة الملف"}"
+                return@launch
+            }
+            if (links.isEmpty()) {
+                _message.value = "لم يتم العثور على روابط دعوات واتساب داخل الملف"
+                return@launch
+            }
+            val added = repo.addScanLinksFromText(links.joinToString("\n"))
+            _scanItems.value = repo.scanItems()
+            ScanController.refreshStats()
+            _message.value = "تم استيراد $added رابط جديد من الملف • الإجمالي ${_scanItems.value.size}"
+        }
+    }
+
     fun importScanLinksFromExtraction() {
         viewModelScope.launch {
             val added = repo.importInviteLinksFromExtraction()

@@ -20,6 +20,7 @@ object ShizukuBridge {
     data class FastUiResult(val state:String,val detail:String,val payload:String){val success:Boolean get()=state=="OK"&&payload.startsWith("__AL_FAST_COMPACT__=")}
     data class FastUiFrame(val sequence:Long,val eventTriggered:Boolean,val result:FastUiResult)
     data class ShellResult(val exitCode:Int,val output:String){val success:Boolean get()=exitCode==0}
+    data class ShellUiAction(val found:Boolean,val x:Int,val y:Int,val detail:String)
 
     @Volatile private var remote:IShizukuShellService?=null
     @Volatile private var binding:CompletableDeferred<Boolean>?=null
@@ -42,6 +43,89 @@ object ShizukuBridge {
     suspend fun fastBack(context:Context):Boolean=withContext(Dispatchers.IO){ensureBound(context)&&runCatching{remote?.fastBack()==true}.getOrDefault(false)}
     suspend fun fastSetEditableText(context:Context,targetPackage:String,text:String,preferBottom:Boolean):Boolean=withContext(Dispatchers.IO){ensureBound(context)&&runCatching{remote?.fastSetEditableText(targetPackage,text,preferBottom)==true}.getOrDefault(false)}
     suspend fun execute(context:Context,command:String,timeoutMs:Int=6000):ShellResult=withContext(Dispatchers.IO){if(!ensureBound(context))return@withContext ShellResult(126,"Shizuku user service unavailable");parseShell(runCatching{remote?.execute(command,timeoutMs)}.getOrNull().orEmpty())}
+    suspend fun isPackageForeground(context:Context,targetPackage:String):Boolean {
+        if(!Regex("[A-Za-z0-9_.]+").matches(targetPackage))return false
+        val r=execute(
+            context,
+            "dumpsys activity activities 2>/dev/null | grep -m 2 -E 'mResumedActivity|topResumedActivity'; " +
+                "dumpsys window windows 2>/dev/null | grep -m 2 -E 'mCurrentFocus|mFocusedApp'",
+            2500
+        )
+        return r.output.contains(targetPackage)
+    }
+
+    private fun xmlAttr(node:String,name:String):String =
+        Regex("\\b${Regex.escape(name)}=\\\"([^\\\"]*)\\\"")
+            .find(node)?.groupValues?.getOrNull(1).orEmpty()
+
+    private fun decodeXmlAttr(value:String):String = value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace(Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]"), "")
+        .trim()
+
+    suspend fun shellFindUiAction(
+        context:Context,
+        targetPackage:String,
+        labels:List<String>,
+        resourceIds:List<String>
+    ):ShellUiAction = withContext(Dispatchers.IO) {
+        if(!Regex("[A-Za-z0-9_.]+").matches(targetPackage))
+            return@withContext ShellUiAction(false,0,0,"bad-package")
+        if(!isPackageForeground(context,targetPackage))
+            return@withContext ShellUiAction(false,0,0,"target-not-foreground")
+
+        val tmp="/data/local/tmp/althmany_join_${Process.myUid()}.xml"
+        val dump=execute(
+            context,
+            "rm -f '$tmp'; uiautomator dump --compressed '$tmp' >/dev/null 2>&1; cat '$tmp' 2>/dev/null; rm -f '$tmp'",
+            4500
+        )
+        if(!dump.success || !dump.output.contains("<hierarchy"))
+            return@withContext ShellUiAction(false,0,0,"shell-dump-failed:${dump.exitCode}")
+
+        val wantedLabels=labels.map {
+            it.lowercase().replace(Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]"), "").trim()
+        }.filter(String::isNotBlank)
+        val wantedIds=resourceIds.map(String::lowercase)
+        val boundsRx=Regex("\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]")
+        var best:ShellUiAction?=null
+
+        Regex("<node\\b[^>]*>").findAll(dump.output).forEach { m ->
+            val raw=m.value
+            val text=decodeXmlAttr(xmlAttr(raw,"text"))
+            val desc=decodeXmlAttr(xmlAttr(raw,"content-desc"))
+            val id=decodeXmlAttr(xmlAttr(raw,"resource-id")).lowercase()
+            val label="$text $desc".lowercase().trim()
+            val semantic=wantedLabels.any { token -> label==token || label.contains(token) }
+            val idHit=wantedIds.any { token -> id.contains(token) }
+            if(!semantic && !idHit)return@forEach
+
+            val b=boundsRx.find(xmlAttr(raw,"bounds"))?.groupValues ?: return@forEach
+            val left=b.getOrNull(1)?.toIntOrNull() ?: return@forEach
+            val top=b.getOrNull(2)?.toIntOrNull() ?: return@forEach
+            val right=b.getOrNull(3)?.toIntOrNull() ?: return@forEach
+            val bottom=b.getOrNull(4)?.toIntOrNull() ?: return@forEach
+            if(right<=left || bottom<=top)return@forEach
+            val candidate=ShellUiAction(true,(left+right)/2,(top+bottom)/2,"shell-semantic")
+            if(best==null || candidate.y > best!!.y)best=candidate
+        }
+        best ?: ShellUiAction(false,0,0,"shell-no-action")
+    }
+
+    suspend fun profileSafeTap(
+        context:Context,targetPackage:String,x:Int,y:Int
+    ):Boolean = withContext(Dispatchers.IO) {
+        if(x<0 || y<0 || !Regex("[A-Za-z0-9_.]+").matches(targetPackage))
+            return@withContext false
+        if(!isPackageForeground(context,targetPackage))
+            return@withContext false
+        execute(context,"input tap $x $y",2500).success
+    }
+
     suspend fun probe(context:Context,targetPackage:String?):String{val s=status();if(!s.binderAlive)return "binder=OFF";if(!s.permissionGranted)return "binder=ON; permission=DENIED";if(!ensureBound(context))return "binder=ON; permission=GRANTED; userService=FAILED";val id=execute(context,"id",2500);val safe=targetPackage?.takeIf{Regex("[A-Za-z0-9_.]+").matches(it)};val snap=if(safe!=null)fastSnapshot(context,safe,180) else FastUiResult("SKIPPED","no target","");return "binder=ON; permission=GRANTED; serverUid=${s.serverUid?:-1}; shell=${if(id.success)"OK" else "FAIL"}; persistentUI=${snap.state}:${snap.detail.take(80)}"}
     suspend fun launchPackage(context:Context,targetPackage:String):Boolean{if(!Regex("[A-Za-z0-9_.]+").matches(targetPackage))return false;val cmd="monkey -p '$targetPackage' -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1";return execute(context,cmd,4000).success}
     suspend fun reset(context:Context):Boolean=withContext(Dispatchers.IO){ensureBound(context)&&runCatching{remote?.fastResetUiAutomation()==true}.getOrDefault(false)}

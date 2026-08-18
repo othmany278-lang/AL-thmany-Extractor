@@ -121,6 +121,18 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
         }
     }
 
+    val openScanFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.importScanFile(uri)
+        }
+    }
+
     val pickPublishAttachment = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -254,6 +266,17 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onTargetWhatsApp = viewModel::setTargetWhatsApp,
                     onAddLinks = viewModel::addScanLinks,
                     onImportExtraction = viewModel::importScanLinksFromExtraction,
+                    onImportFile = {
+                        openScanFile.launch(
+                            arrayOf(
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "application/vnd.ms-excel",
+                                "text/csv",
+                                "text/plain",
+                                "application/octet-stream"
+                            )
+                        )
+                    },
                     onAction = { mode ->
                         viewModel.setScanActionMode(mode)
                         if (mode == ScanActionMode.SCAN_AND_JOIN) viewModel.setScanRequestToJoinEnabled(true)
