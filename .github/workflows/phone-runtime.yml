@@ -76,18 +76,24 @@ jobs:
       - name: Cold start + Accessibility binding test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
-          target: google_apis
+          # Lightweight/stable AOSP emulator is enough for app + Accessibility testing.
+          api-level: 34
+          target: default
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
           disable-animations: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-boot-timeout: 900
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
             set -euo pipefail
 
             APP="com.althmany.extractor"
             COMPONENT="$APP/com.althmany.extractor.MainActivity"
             SERVICE="$APP/com.althmany.extractor.accessibility.WhatsAppAccessibilityService"
+
+            echo "PHONE: emulator boot completed"
+            adb wait-for-device
+            adb shell getprop sys.boot_completed | tee "$GITHUB_WORKSPACE/phone-emulator-boot.txt"
 
             adb install -r "$PHONE_APK"
 
@@ -138,7 +144,7 @@ jobs:
 
             BOUND=0
 
-            for _ in $(seq 1 60); do
+            for _ in $(seq 1 80); do
               adb shell dumpsys accessibility \
                 > "$GITHUB_WORKSPACE/phone-accessibility.txt" || true
 
@@ -208,6 +214,7 @@ jobs:
           path: |
             phone-build.log
             phone-package.txt
+            phone-emulator-boot.txt
             phone-startup.txt
             phone-accessibility-setting.txt
             phone-accessibility.txt
