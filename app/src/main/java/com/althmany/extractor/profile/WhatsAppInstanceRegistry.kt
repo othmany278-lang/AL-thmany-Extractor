@@ -53,19 +53,24 @@ object WhatsAppInstanceRegistry {
 
         listOf(WHATSAPP, WHATSAPP_BUSINESS, WHATSAPP_CLONED).forEach { addPackage(it) }
 
-        val launcher = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-        runCatching { pm.queryIntentActivities(launcher, 0) }.getOrDefault(emptyList()).forEach { ri ->
-            val pkg = ri.activityInfo?.packageName.orEmpty()
-            val label = runCatching { ri.loadLabel(pm)?.toString().orEmpty() }.getOrDefault("")
-            if (looksLikeWhatsApp(pkg, label)) addPackage(pkg, label)
+        // Avoid enumerating every launcher application on every onResume.
+        // This was unnecessarily expensive on some Samsung/vendor phones and could
+        // make the application appear frozen during startup.
+        //
+        // Unknown Work/Secure/Dual WhatsApp variants are still discovered through
+        // the WhatsApp invite intent, which is the capability this runtime needs.
+        val inviteIntent = Intent(Intent.ACTION_VIEW, Uri.parse(SAMPLE_INVITE)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
         }
-
-        val inviteIntent = Intent(Intent.ACTION_VIEW, Uri.parse(SAMPLE_INVITE)).apply { addCategory(Intent.CATEGORY_BROWSABLE) }
-        runCatching { pm.queryIntentActivities(inviteIntent, 0) }.getOrDefault(emptyList()).forEach { ri ->
-            val pkg = ri.activityInfo?.packageName.orEmpty()
-            val label = runCatching { ri.loadLabel(pm)?.toString().orEmpty() }.getOrDefault("")
-            if (looksLikeWhatsApp(pkg, label)) addPackage(pkg, label)
-        }
+        runCatching { pm.queryIntentActivities(inviteIntent, 0) }
+            .getOrDefault(emptyList())
+            .forEach { ri ->
+                val pkg = ri.activityInfo?.packageName.orEmpty()
+                val label = runCatching {
+                    ri.loadLabel(pm)?.toString().orEmpty()
+                }.getOrDefault("")
+                if (looksLikeWhatsApp(pkg, label)) addPackage(pkg, label)
+            }
 
         val result = byPackage.values.sortedWith(compareBy<WhatsAppInstance>({ it.kind.ordinal }, { it.labelAr.lowercase() }, { it.packageName }))
         cache = result; cacheProfile = profile.profileKey; cacheAt = now

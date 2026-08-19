@@ -66,12 +66,16 @@ object ScanController {
         repository = repo
         settingsStore = ScanSettingsStore(appContext)
         notifier = ScanNotifier(appContext)
+        val loadedMode = settingsStore.loadActionMode()
+        val loadedRequestToJoin = settingsStore.loadRequestToJoinEnabled()
+        val effectiveRequestToJoin = loadedMode == ScanActionMode.JOIN_ONLY || loadedRequestToJoin
+        if (effectiveRequestToJoin != loadedRequestToJoin) settingsStore.saveRequestToJoinEnabled(effectiveRequestToJoin)
         _state.value = _state.value.copy(
             speed = settingsStore.loadSpeed(),
             scope = settingsStore.loadScope(),
             maxAttempts = settingsStore.loadMaxAttempts(),
-            actionMode = settingsStore.loadActionMode(),
-            requestToJoinEnabled = settingsStore.loadRequestToJoinEnabled()
+            actionMode = loadedMode,
+            requestToJoinEnabled = effectiveRequestToJoin
         )
         refreshStats()
     }
@@ -187,13 +191,17 @@ object ScanController {
     fun setActionMode(value: ScanActionMode) {
         if (isRunning()) return
         settingsStore.saveActionMode(value)
-        _state.value = _state.value.copy(actionMode = value)
+        val requestEnabled = if (value == ScanActionMode.JOIN_ONLY) true else _state.value.requestToJoinEnabled
+        if (value == ScanActionMode.JOIN_ONLY) settingsStore.saveRequestToJoinEnabled(true)
+        _state.value = _state.value.copy(actionMode = value, requestToJoinEnabled = requestEnabled)
     }
 
     fun setRequestToJoinEnabled(value: Boolean) {
         if (isRunning()) return
-        settingsStore.saveRequestToJoinEnabled(value)
-        _state.value = _state.value.copy(requestToJoinEnabled = value)
+        // JOIN_ONLY always includes approval links; do not allow the UI setting to disable them.
+        val effective = if (_state.value.actionMode == ScanActionMode.JOIN_ONLY) true else value
+        settingsStore.saveRequestToJoinEnabled(effective)
+        _state.value = _state.value.copy(requestToJoinEnabled = effective)
     }
 
     fun start() {
@@ -535,7 +543,10 @@ object ScanController {
         val direct = decision.status == ScanStatus.DIRECT
         if (!approval && !direct) return decision
 
-        if (approval && !_state.value.requestToJoinEnabled) {
+        // JOIN_ONLY means perform every supported membership action, including Request to join.
+        // In SCAN_AND_JOIN the explicit approval toggle is still respected.
+        val approvalAllowed = mode == ScanActionMode.JOIN_ONLY || _state.value.requestToJoinEnabled
+        if (approval && !approvalAllowed) {
             return decision.copy(
                 detail = "${decision.detail} — إرسال طلب الانضمام معطل من الإعدادات",
                 signalCode = "APPROVAL_ACTION_DISABLED"
@@ -688,7 +699,8 @@ object ScanController {
         if(decision.status in setOf(ScanStatus.ALREADY_MEMBER,ScanStatus.JOINED,ScanStatus.REQUEST_PENDING))return decision
         val approval=decision.status==ScanStatus.APPROVAL;val direct=decision.status==ScanStatus.DIRECT
         if(!approval&&!direct)return decision
-        if(approval&&!_state.value.requestToJoinEnabled)return decision.copy(detail="${decision.detail} — إرسال طلب الانضمام معطل",signalCode="APPROVAL_ACTION_DISABLED")
+        val approvalAllowed = mode==ScanActionMode.JOIN_ONLY || _state.value.requestToJoinEnabled
+        if(approval&&!approvalAllowed)return decision.copy(detail="${decision.detail} — إرسال طلب الانضمام معطل",signalCode="APPROVAL_ACTION_DISABLED")
         var tree=awaitShizukuTree(packageName,900L)
         _state.value=_state.value.copy(message=if(approval)"Shizuku: طلب انضمام • UI ثم shell fallback" else "Shizuku: انضمام • UI ثم shell fallback")
         val firstAction = when {

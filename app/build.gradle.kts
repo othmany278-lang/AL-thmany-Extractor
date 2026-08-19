@@ -12,8 +12,8 @@ android {
         applicationId = "com.althmany.extractor"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2210
-        versionName = "2.21.0"
+        versionCode = 2211
+        versionName = "2.21.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -42,6 +42,18 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+
+        // Dedicated installable build for physical phones.
+        // IMPORTANT: no ".debug" suffix, so the Android Accessibility
+        // component belongs to exactly com.althmany.extractor.
+        create("phoneTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = null
+            versionNameSuffix = "-phone-test"
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
         }
     }
 }
@@ -75,4 +87,8 @@ dependencies {
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }

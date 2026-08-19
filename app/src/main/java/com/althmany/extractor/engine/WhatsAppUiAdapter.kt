@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import com.althmany.extractor.data.GroupSyncCandidate
+import com.althmany.extractor.profile.WhatsAppInstanceRegistry
 import java.util.Locale
 import java.text.Normalizer
 
@@ -99,7 +100,9 @@ class WhatsAppUiAdapter {
         return if (expectedPackage != null) {
             pkg == expectedPackage
         } else {
-            pkg == ExtractionController.WHATSAPP || pkg == ExtractionController.WHATSAPP_BUSINESS
+            // No fixed two-package fallback here: Samsung Dual Messenger / clone / vendor
+            // profile packages are discovered at runtime by WhatsAppInstanceRegistry.
+            WhatsAppInstanceRegistry.isSupportedPackage(pkg)
         }
     }
 
@@ -220,8 +223,8 @@ class WhatsAppUiAdapter {
     }
 
     /** True only for the main Chats list, never for an opened conversation/info/search screen. */
-    fun isConversationListVisible(root: AccessibilityNodeInfo?): Boolean {
-        if (root == null || !isWhatsAppRoot(root)) return false
+    fun isConversationListVisible(root: AccessibilityNodeInfo?, expectedPackage: String? = null): Boolean {
+        if (root == null || !isWhatsAppRoot(root, expectedPackage)) return false
         if (isGroupInfoScreen(root)) return false
         if (findMessageComposer(root) != null) return false
         val window = Rect().also(root::getBoundsInScreen)

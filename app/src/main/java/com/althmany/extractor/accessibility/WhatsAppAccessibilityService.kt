@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.althmany.extractor.engine.ExtractionController
+import com.althmany.extractor.diagnostics.DiagnosticLog
 import com.althmany.extractor.engine.PublishController
 import com.althmany.extractor.engine.RuntimeOperation
 import com.althmany.extractor.engine.RuntimeOperationCoordinator
@@ -31,12 +32,14 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
+        DiagnosticLog.record("ACCESSIBILITY", "service_onCreate")
         bindRuntime("onCreate")
         startFallbackPoll()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        DiagnosticLog.record("ACCESSIBILITY", "service_onServiceConnected")
         bindRuntime("onServiceConnected")
         startFallbackPoll()
         startWarmupProbe()
@@ -52,6 +55,7 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val safeEvent = event ?: return
         val packageName = safeEvent.packageName?.toString()
+        DiagnosticLog.recordAccessibilityEvent(packageName, safeEvent.eventType)
         AccessibilityRuntimeBridge.event(this, packageName)
         packageName?.let { runCatching { ProfileAccessibilityRuntime.recordEvent(this, it) } }
         attachControllersSafely("event")
@@ -62,17 +66,20 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onUnbind(intent: Intent?): Boolean {
+        DiagnosticLog.record("ACCESSIBILITY", "service_onUnbind")
         detachRuntime()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        DiagnosticLog.record("ACCESSIBILITY", "service_onDestroy")
         detachRuntime()
         runtimeScope.cancel()
         super.onDestroy()
     }
 
     private fun bindRuntime(source: String) {
+        DiagnosticLog.record("ACCESSIBILITY_BIND", "source=$source")
         AccessibilityRuntimeBridge.bind(this)
         runCatching { ProfileAccessibilityRuntime.recordServiceConnected(this) }
             .onFailure { Log.w(TAG, "recordServiceConnected failed: $source", it) }
@@ -81,11 +88,20 @@ class WhatsAppAccessibilityService : AccessibilityService() {
 
     private fun attachControllersSafely(source: String) {
         runCatching { ExtractionController.attachService(this) }
-            .onFailure { Log.e(TAG, "Extraction attach failed: $source", it) }
+            .onFailure {
+                Log.e(TAG, "Extraction attach failed: $source", it)
+                DiagnosticLog.record("ACCESSIBILITY_ATTACH_ERROR", "Extraction source=$source", it)
+            }
         runCatching { ScanController.attachService(this) }
-            .onFailure { Log.e(TAG, "Scan attach failed: $source", it) }
+            .onFailure {
+                Log.e(TAG, "Scan attach failed: $source", it)
+                DiagnosticLog.record("ACCESSIBILITY_ATTACH_ERROR", "Scan source=$source", it)
+            }
         runCatching { PublishController.attachService(this) }
-            .onFailure { Log.e(TAG, "Publish attach failed: $source", it) }
+            .onFailure {
+                Log.e(TAG, "Publish attach failed: $source", it)
+                DiagnosticLog.record("ACCESSIBILITY_ATTACH_ERROR", "Publish source=$source", it)
+            }
     }
 
     private fun detachRuntime() {

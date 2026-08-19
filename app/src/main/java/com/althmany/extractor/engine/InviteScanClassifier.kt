@@ -82,7 +82,9 @@ object InviteScanClassifier {
 
     private val genericUi = setOf(
         "واتساب", "whatsapp", "رجوع", "back", "مشاركة", "share", "موافق", "ok", "إلغاء", "cancel",
-        "المجموعة", "group", "المجتمع", "community", "الدردشة", "chat", "معلومات", "info"
+        "المجموعة", "group", "المجتمع", "community", "الدردشة", "chat", "معلومات", "info",
+        "الدردشات", "chats", "المجتمعات", "communities", "التحديثات", "updates",
+        "المكالمات", "calls", "الحالة", "status"
     )
 
     fun classify(texts: Collection<String>): InviteScanDecision {
@@ -133,9 +135,31 @@ object InviteScanClassifier {
     private data class Metadata(val groupName: String?, val memberCountText: String?, val inviteKind: InviteKind)
 
     private fun detectMetadata(texts: List<String>, normalized: String): Metadata {
+        // Do NOT classify an invite as a community just because WhatsApp's bottom navigation
+        // contains "Communities/المجتمعات". Invite kind must come from invite-specific semantics.
+        val communitySignals = listOf(
+            "الانضمام إلى المجتمع", "الانضمام الى المجتمع", "الانضمام للمجتمع",
+            "انضم إلى المجتمع", "انضم الى المجتمع", "انضم للمجتمع",
+            "اطلب الانضمام إلى المجتمع", "اطلب الانضمام الى المجتمع", "اطلب الانضمام للمجتمع",
+            "طلب الانضمام إلى المجتمع", "طلب الانضمام الى المجتمع", "طلب الانضمام للمجتمع",
+            "استكشاف المجتمع", "join community", "join this community", "join the community",
+            "join community now", "join this community now", "join community chat",
+            "request to join community", "ask to join community", "request community access",
+            "explore community"
+        )
+        val groupSignals = listOf(
+            "الانضمام إلى المجموعة", "الانضمام الى المجموعة", "الانضمام للمجموعة",
+            "انضمام إلى المجموعة", "انضمام الى المجموعة", "انضم إلى المجموعة", "انضم الى المجموعة", "انضم للمجموعة",
+            "الانضمام إلى القروب", "الانضمام الى القروب", "انضم إلى القروب", "انضم الى القروب", "انضم للقروب",
+            "طلب الانضمام إلى المجموعة", "طلب الانضمام الى المجموعة", "طلب الانضمام للمجموعة",
+            "طلب الانضمام إلى القروب", "طلب الانضمام الى القروب", "طلب الانضمام للقروب",
+            "اطلب الانضمام إلى المجموعة", "اطلب الانضمام الى المجموعة", "اطلب الانضمام للمجموعة",
+            "join group", "join the group", "join this group", "join group now",
+            "join this chat", "join this group now", "request to join group", "request group access"
+        )
         val kind = when {
-            listOf("المجتمع", "مجتمع", "community").any { normalized.contains(it.lowercase(Locale.ROOT)) } -> InviteKind.COMMUNITY
-            listOf("المجموعة", "مجموعة", "group", "participant", "مشارك").any { normalized.contains(it.lowercase(Locale.ROOT)) } -> InviteKind.GROUP
+            communitySignals.any { normalized.contains(it.lowercase(Locale.ROOT)) } -> InviteKind.COMMUNITY
+            groupSignals.any { normalized.contains(it.lowercase(Locale.ROOT)) } -> InviteKind.GROUP
             else -> InviteKind.UNKNOWN
         }
 

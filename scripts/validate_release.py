@@ -57,6 +57,7 @@ scan = read('app/src/main/java/com/althmany/extractor/engine/ScanController.kt')
 scan_ui = read('app/src/main/java/com/althmany/extractor/engine/ScanUiState.kt')
 publish = read('app/src/main/java/com/althmany/extractor/engine/PublishController.kt')
 adapter = read('app/src/main/java/com/althmany/extractor/engine/WhatsAppUiAdapter.kt')
+classifier = read('app/src/main/java/com/althmany/extractor/engine/InviteScanClassifier.kt')
 router = read('app/src/main/java/com/althmany/extractor/engine/GroupAccessRouter.kt')
 service = read('app/src/main/java/com/althmany/extractor/accessibility/WhatsAppAccessibilityService.kt')
 bridge = read('app/src/main/java/com/althmany/extractor/accessibility/AccessibilityRuntimeBridge.kt')
@@ -81,8 +82,8 @@ checks = {
     'Kotlin 2.3.21': root_build.count('version "2.3.21"') >= 2,
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
-    'versionCode 2210': 'versionCode = 2210' in app_build,
-    'versionName 2.21.0': 'versionName = "2.21.0"' in app_build,
+    'versionCode 2211': 'versionCode = 2211' in app_build,
+    'versionName 2.21.1': 'versionName = "2.21.1"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -137,6 +138,8 @@ checks = {
     'Scanner mode UI': 'ScanActionMode.entries' in screens and 'onScanActionMode' in screens and 'onRequestToJoinEnabled' in screens,
     'Open-once scan action path': 'maybeApplyMembershipAction' in scan and 'clickInviteAction' in adapter,
     'Request-to-join explicit setting': 'requestToJoinEnabled' in scan_ui and 'APPROVAL_ACTION_DISABLED' in scan,
+    'JOIN_ONLY always includes approval actions': 'mode == ScanActionMode.JOIN_ONLY || _state.value.requestToJoinEnabled' in scan and 'value == ScanActionMode.JOIN_ONLY' in scan,
+    'Community kind ignores generic bottom-nav label': 'val communitySignals = listOf(' in classifier and 'communitySignals.any' in classifier and 'listOf("المجتمع", "مجتمع", "community").any' not in classifier,
     'Join verified state': 'ScanStatus.JOINED' in scan and 'JOIN_VERIFIED' in scan,
     'Uncertain action duplicate guard': 'ScanStatus.ACTION_UNCERTAIN' in scan and 'ACTION_UNCERTAIN' in scan_models,
     'Scan connectivity guard': 'awaitNetworkAvailability()' in scan and 'WAITING_NETWORK' in scan and 'ACCESS_NETWORK_STATE' in manifest,
@@ -169,10 +172,11 @@ checks = {
     'Shizuku publish fallback': 'shizukuMode' in publish and 'ShizukuBridge.ensureBound' in publish and 'openVerifiedGroupShizuku' in publish,
     'Shizuku scan fallback': 'shizukuMode' in scan and 'ShizukuBridge.ensureBound' in scan and 'scanOneShizuku' in scan,
     'Dynamic WhatsApp/clone discovery': all(x in registry for x in ['WHATSAPP_CLONED', 'queryIntentActivities', 'looksLikeWhatsApp', 'cacheProfile']),
+    'Default WhatsApp root accepts discovered clone': 'WhatsAppInstanceRegistry.isSupportedPackage(pkg)' in adapter,
     'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
     'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
     'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
-    'Workflow artifact v2.21.0': 'ControllerRuntime-2.21.0' in workflow,
+    'Workflow artifact v2.21.1': 'ControllerRuntime-2.21.1' in workflow,
         'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
     'Runtime sync row discovery': all(x in adapter for x in ['collectChatListCandidatesDetailedInternal', 'nearestClickable', 'activateChatsTab']) and 'scanConversationList' in extract,
     'Archived group synchronization': 'sync-archived-groups' in extract and 'openArchived' in shizuku_runtime,
@@ -204,4 +208,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.21.0 Controller Runtime source contract: PASS')
+print('\nAL-thmany Extractor 2.21.1 Controller Runtime source contract: PASS')

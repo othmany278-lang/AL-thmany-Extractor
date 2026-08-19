@@ -1,3 +1,13 @@
+# AL-thmany Extractor 2.21.1 — Runtime Verified Fix
+
+النسخة الحالية هي **2.21.1**. تم إصلاح JOIN_ONLY ليتعامل مع طلب الانضمام، دعم WhatsApp Clone في مسار Accessibility، ومنع تصنيف المجموعة كمجتمع بسبب تبويب Communities. كما أصبح GitHub Actions يثبت APK على Android Emulator ويفتحه ويفحص Logcat من crash/ANR قبل رفع APK النهائي.
+
+تفاصيل الإصلاح: `FIX_2.21.1_AR.md`.
+
+---
+
+## سجل README السابق (2.17.0)
+
 # AL-thmany Extractor 2.17.0 — Exact Dashboard + Root Fix
 
 ## الإصدار الحالي
