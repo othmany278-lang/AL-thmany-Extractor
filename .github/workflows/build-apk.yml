@@ -82,8 +82,8 @@ jobs:
             set -eu
             PACKAGE_NAME="com.althmany.extractor.debug"
             ACTIVITY_NAME="com.althmany.extractor.MainActivity"
-            APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
-            test -n "$APK"
+            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+            test -f "$APK"
 
             adb install -r "$APK"
             adb shell am force-stop "$PACKAGE_NAME" || true
