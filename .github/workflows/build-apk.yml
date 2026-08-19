@@ -79,46 +79,20 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
-            PACKAGE_NAME="com.althmany.extractor.debug"
-            ACTIVITY_NAME="com.althmany.extractor.MainActivity"
-            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
-            test -f "$APK"
-
-            adb install -r "$APK"
-            adb shell am force-stop "$PACKAGE_NAME" || true
+            test -f "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+            adb install -r "$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+            adb shell am force-stop com.althmany.extractor.debug || true
             adb logcat -c
-
-            set +e
-            adb shell am start -W -n "$PACKAGE_NAME/$ACTIVITY_NAME" > runtime-launch.txt 2>&1
-            LAUNCH_RC=$?
-            cat runtime-launch.txt
-            set -e
-            if [ "$LAUNCH_RC" -ne 0 ] || grep -Eq '(^|[[:space:]])Error:|Exception occurred while executing' runtime-launch.txt; then
-              adb logcat -d > runtime-logcat.txt || true
-              adb exec-out screencap -p > runtime-screen.png || true
-              echo "RUNTIME FAIL: launcher activity could not start"
-              exit 1
-            fi
-
+            adb shell am start -W -n com.althmany.extractor.debug/com.althmany.extractor.MainActivity > "$GITHUB_WORKSPACE/runtime-launch.txt" 2>&1 || { cat "$GITHUB_WORKSPACE/runtime-launch.txt"; exit 1; }
+            cat "$GITHUB_WORKSPACE/runtime-launch.txt"
+            grep -Eq '(^|[[:space:]])Error:|Exception occurred while executing' "$GITHUB_WORKSPACE/runtime-launch.txt" && { echo "RUNTIME FAIL: launch error"; exit 1; } || true
             sleep 8
-            PID="$(adb shell pidof "$PACKAGE_NAME" | tr -d '\r' || true)"
-            adb logcat -d > runtime-logcat.txt || true
-            adb exec-out screencap -p > runtime-screen.png || true
-
-            if [ -z "$PID" ]; then
-              echo "RUNTIME FAIL: application process is not alive after launch"
-              grep -E "FATAL EXCEPTION|AndroidRuntime|Process: $PACKAGE_NAME|ANR in $PACKAGE_NAME" runtime-logcat.txt || true
-              exit 1
-            fi
-
-            if grep -E "FATAL EXCEPTION|Process: $PACKAGE_NAME.*has died|ANR in $PACKAGE_NAME" runtime-logcat.txt; then
-              echo "RUNTIME FAIL: crash/ANR detected"
-              exit 1
-            fi
-
-            adb shell dumpsys activity activities | grep -F "$PACKAGE_NAME" > runtime-activity.txt || true
-            echo "RUNTIME PASS: APK installed, MainActivity launched, process alive (PID=$PID), no immediate crash/ANR"
+            adb logcat -d > "$GITHUB_WORKSPACE/runtime-logcat.txt" || true
+            adb exec-out screencap -p > "$GITHUB_WORKSPACE/runtime-screen.png" || true
+            adb shell pidof com.althmany.extractor.debug | grep -q . || { echo "RUNTIME FAIL: app process stopped"; exit 1; }
+            grep -E "FATAL EXCEPTION|Process: com.althmany.extractor.debug.*has died|ANR in com.althmany.extractor.debug" "$GITHUB_WORKSPACE/runtime-logcat.txt" && { echo "RUNTIME FAIL: crash or ANR"; exit 1; } || true
+            adb shell dumpsys activity activities | grep -F com.althmany.extractor.debug > "$GITHUB_WORKSPACE/runtime-activity.txt" || true
+            echo "RUNTIME PASS: APK installed and application launched successfully"
 
       - name: Upload runtime diagnostics
         if: always()
