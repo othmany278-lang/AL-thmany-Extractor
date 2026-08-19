@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="join_group_button" />
+    <item type="id" name="request_to_join_button" />
+    <item type="id" name="join_community_button" />
+    <item type="id" name="continue_button" />
+    <item type="id" name="close_button" />
+</resources>

@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AL-thmany-Extractor"
 include(":app")
+include(":whatsapp-simulator")
