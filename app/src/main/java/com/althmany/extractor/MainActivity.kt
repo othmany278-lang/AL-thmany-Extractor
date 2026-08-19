@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.althmany.extractor.data.PublishContentMode
+import com.althmany.extractor.diagnostics.DiagnosticLog
 import com.althmany.extractor.engine.ExtractionController
 import com.althmany.extractor.engine.PublishController
 import com.althmany.extractor.engine.ScanActionMode
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DiagnosticLog.record("ACTIVITY", "MainActivity_onCreate")
         setContent {
             AlThmanyTheme { ExtractorAppUi(viewModel) }
         }
@@ -62,6 +64,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        DiagnosticLog.record("ACTIVITY", "MainActivity_onResume")
         viewModel.refreshRuntimeEnvironment()
     }
 }
@@ -350,7 +353,85 @@ private fun ExtractorAppUi(viewModel: AppViewModel) {
                     onClearAll = viewModel::clearAll
                 )
 
-                AppScreen.LOGS -> LogsScreen(zero, logs, viewModel::reloadLogs)
+                AppScreen.LOGS -> LogsScreen(
+                    padding = zero,
+                    logs = logs,
+                    onRefresh = viewModel::reloadLogs,
+                    onShare = {
+                        val runtimeLines = listOf(
+                            "app.package=${context.packageName}",
+                            "engine.status=${engine.status}",
+                            "engine.message=${engine.message}",
+                            "engine.phase=${engine.phaseDetail}",
+                            "engine.targetWhatsApp=${engine.selectedWhatsAppPackage}",
+                            "engine.accessibilityEnabledInSettings=${engine.accessibilityEnabledInSettings}",
+                            "engine.serviceConnected=${engine.serviceConnected}",
+                            "engine.profileAccessibilityConnected=${engine.profileAccessibilityConnected}",
+                            "engine.shizukuReady=${engine.shizukuReady}",
+                            "engine.shizukuDetail=${engine.shizukuDetail}",
+                            "engine.backendRecommendation=${engine.backendRecommendation}",
+                            "engine.currentGroup=${engine.currentGroup}",
+                            "engine.progress=${engine.currentGroupIndex}/${engine.runGroupCount}",
+                            "engine.availableWhatsApp=${engine.availableWhatsApp.joinToString { "${it.labelAr}:${it.packageName}:launchable=${it.launchable}:invite=${it.canHandleInvite}" }}",
+                            "engine.stats=${engine.stats}",
+                            "scan.status=${scanState.status}",
+                            "scan.running=${scanState.running}",
+                            "scan.paused=${scanState.paused}",
+                            "scan.serviceConnected=${scanState.serviceConnected}",
+                            "scan.mode=${scanState.actionMode}",
+                            "scan.scope=${scanState.scope}",
+                            "scan.speed=${scanState.speed}",
+                            "scan.requestToJoin=${scanState.requestToJoinEnabled}",
+                            "scan.progress=${scanState.currentIndex}/${scanState.total}",
+                            "scan.attempt=${scanState.currentAttempt}",
+                            "scan.currentUrl=${scanState.currentUrl}",
+                            "scan.message=${scanState.message}",
+                            "scan.stats=${scanState.stats}",
+                            "publish.status=${publishState.status}",
+                            "publish.running=${publishState.running}",
+                            "publish.paused=${publishState.paused}",
+                            "publish.progress=${publishState.currentIndex}/${publishState.total}",
+                            "publish.currentGroup=${publishState.currentGroup}",
+                            "publish.info=${publishState.info}",
+                            "publish.runToken=${publishState.runToken}",
+                            "publish.stats=${publishState.stats}"
+                        )
+                        DiagnosticLog.shareReport(
+                            context = context,
+                            runtimeLines = runtimeLines,
+                            dbLogs = logs,
+                            scanItems = scanItems,
+                            publishItems = publishItems
+                        )
+                    },
+                    onCopy = {
+                        val runtimeLines = listOf(
+                            "engine.status=${engine.status}",
+                            "engine.message=${engine.message}",
+                            "engine.targetWhatsApp=${engine.selectedWhatsAppPackage}",
+                            "engine.accessibilityEnabledInSettings=${engine.accessibilityEnabledInSettings}",
+                            "engine.serviceConnected=${engine.serviceConnected}",
+                            "engine.profileAccessibilityConnected=${engine.profileAccessibilityConnected}",
+                            "engine.shizukuReady=${engine.shizukuReady}",
+                            "scan.status=${scanState.status}",
+                            "scan.running=${scanState.running}",
+                            "scan.serviceConnected=${scanState.serviceConnected}",
+                            "scan.currentUrl=${scanState.currentUrl}",
+                            "scan.message=${scanState.message}",
+                            "publish.status=${publishState.status}",
+                            "publish.running=${publishState.running}",
+                            "publish.currentGroup=${publishState.currentGroup}",
+                            "publish.info=${publishState.info}"
+                        )
+                        DiagnosticLog.copyReport(
+                            context = context,
+                            runtimeLines = runtimeLines,
+                            dbLogs = logs,
+                            scanItems = scanItems,
+                            publishItems = publishItems
+                        )
+                    }
+                )
 
                 AppScreen.SETTINGS -> WorkspaceSettingsScreen(
                     padding = zero,

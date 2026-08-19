@@ -50,6 +50,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -612,36 +614,196 @@ private fun DashboardGradientButton(text: String, icon: androidx.compose.ui.grap
 }
 
 @Composable
-fun LogsScreen(padding: PaddingValues, logs: List<ExtractionLog>, onRefresh: () -> Unit) {
+fun LogsScreen(
+    padding: PaddingValues,
+    logs: List<ExtractionLog>,
+    onRefresh: () -> Unit,
+    onShare: () -> Unit,
+    onCopy: () -> Unit
+) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(DashboardBg, Color(0xFF03121D), DashboardBg))).padding(padding).padding(horizontal = 12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        DashboardBg,
+                        Color(0xFF03121D),
+                        DashboardBg
+                    )
+                )
+            )
+            .padding(padding)
+            .padding(horizontal = 12.dp),
         contentPadding = PaddingValues(top = 14.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Surface(modifier = Modifier.clickable(onClick = onRefresh), color = DashboardPanel2, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, DashboardBorder)) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Refresh, null, tint = DashboardGreen, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("تحديث", color = DashboardGreen)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${logs.size} سجل",
+                        color = DashboardMuted,
+                        fontSize = 11.sp
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "سجلات التشغيل والتشخيص",
+                        color = DashboardText,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 22.sp
+                    )
+                }
+
+                Text(
+                    "بعد حدوث المشكلة اضغط «مشاركة السجل» وأرسل ملف TXT. " +
+                        "سيحتوي على حالة Accessibility ومحركات الفحص والانضمام والاستخراج والنشر والأعطال. " +
+                        "لا يتم جمع محتوى رسائل واتساب عمدًا، ويتم إخفاء أغلب رمز رابط الدعوة.",
+                    color = DashboardMuted,
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        DiagnosticLogAction(
+                            text = "مشاركة السجل",
+                            icon = Icons.Default.Share,
+                            accent = DashboardGreen,
+                            onClick = onShare
+                        )
+                    }
+
+                    item {
+                        DiagnosticLogAction(
+                            text = "نسخ السجل",
+                            icon = Icons.Default.ContentCopy,
+                            accent = DashboardCyan,
+                            onClick = onCopy
+                        )
+                    }
+
+                    item {
+                        DiagnosticLogAction(
+                            text = "تحديث",
+                            icon = Icons.Default.Refresh,
+                            accent = DashboardGreen,
+                            onClick = onRefresh
+                        )
                     }
                 }
-                Spacer(Modifier.weight(1f))
-                Text("سجلات التشغيل", color = DashboardText, fontWeight = FontWeight.Black, fontSize = 22.sp)
             }
         }
-        if (logs.isEmpty()) item { Text("لا توجد سجلات بعد.", color = DashboardMuted, modifier = Modifier.fillMaxWidth().padding(24.dp), textAlign = TextAlign.Center) }
+
+        if (logs.isEmpty()) {
+            item {
+                Text(
+                    "لا توجد سجلات قاعدة بيانات بعد. سجل التشخيص الحي قد يحتوي رغم ذلك على معلومات Accessibility والتشغيل.",
+                    color = DashboardMuted,
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
         items(logs) { log ->
-            Surface(color = DashboardPanel, shape = RoundedCornerShape(13.dp), border = BorderStroke(1.dp, DashboardBorder), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(11.dp), horizontalAlignment = Alignment.End) {
+            Surface(
+                color = DashboardPanel,
+                shape = RoundedCornerShape(13.dp),
+                border = BorderStroke(1.dp, DashboardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(11.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
                     Row(Modifier.fillMaxWidth()) {
-                        Text(log.level, color = when (log.level.uppercase()) { "ERROR" -> DashboardDanger; "WARN" -> DashboardOrange; else -> DashboardGreen }, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        Text(
+                            log.level,
+                            color = when (log.level.uppercase()) {
+                                "ERROR" -> DashboardDanger
+                                "WARN" -> DashboardOrange
+                                else -> DashboardGreen
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
+                        )
+
                         Spacer(Modifier.weight(1f))
-                        Text(log.code, color = DashboardCyan, fontWeight = FontWeight.Bold, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+                        Text(
+                            log.code,
+                            color = DashboardCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    log.groupName?.let { Text(it, color = DashboardText, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
-                    Text(log.message, color = DashboardMuted, fontSize = 10.sp, textAlign = TextAlign.End)
+
+                    log.groupName?.let {
+                        Text(
+                            it,
+                            color = DashboardText,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Text(
+                        log.message,
+                        color = DashboardMuted,
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.End
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticLogAction(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .height(44.dp)
+            .clickable(onClick = onClick),
+        color = DashboardPanel2,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.65f))
+    ) {
+        Row(
+            Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                null,
+                tint = accent,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text,
+                color = accent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp
+            )
         }
     }
 }
