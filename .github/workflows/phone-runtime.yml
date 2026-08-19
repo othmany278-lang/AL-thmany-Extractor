@@ -85,6 +85,7 @@ jobs:
           emulator-boot-timeout: 900
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
+            bash <<'BASH'
             set -euo pipefail
 
             APP="com.althmany.extractor"
@@ -189,6 +190,7 @@ jobs:
               echo "Process alive after bind: PASS"
               echo "Result: READY FOR REAL PHONE TEST"
             } | tee "$GITHUB_WORKSPACE/phone-runtime-report.txt"
+            BASH
 
       - name: Prepare physical-phone APK
         shell: bash
