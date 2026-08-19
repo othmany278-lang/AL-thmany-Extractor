@@ -1,0 +1,227 @@
+name: AL-thmany Physical Phone Runtime APK
+
+on:
+  push:
+    branches:
+      - update-2.21.1
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: al-thmany-phone-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  physical-phone-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      # Preserve one signing key between phone-test builds so the next
+      # physical-phone APK can update the previous one.
+      - name: Cache phone signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: al-thmany-phone-signing-v1
+
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
+
+      - name: Build physical-phone APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assemblePhoneTest --no-daemon --stacktrace --console=plain 2>&1 | tee phone-build.log
+
+          APK="$(find app/build/outputs/apk/phoneTest -type f -name '*.apk' | head -n1)"
+          test -f "$APK"
+
+          echo "PHONE_APK=$APK" >> "$GITHUB_ENV"
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" \
+            | head -n1 | tee phone-package.txt
+
+          grep -q "package: name='com.althmany.extractor'" phone-package.txt || {
+            echo "PHONE FAIL: wrong APK package"
+            exit 1
+          }
+
+      - name: Cold start + Accessibility binding test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+
+            APP="com.althmany.extractor"
+            COMPONENT="$APP/com.althmany.extractor.MainActivity"
+            SERVICE="$APP/com.althmany.extractor.accessibility.WhatsAppAccessibilityService"
+
+            adb install -r "$PHONE_APK"
+
+            : > "$GITHUB_WORKSPACE/phone-startup.txt"
+            : > "$GITHUB_WORKSPACE/phone-logcat.txt"
+
+            # Repeat cold launch to detect startup hangs that a single launch can miss.
+            for ROUND in 1 2 3; do
+              echo "===== COLD START $ROUND =====" | tee -a "$GITHUB_WORKSPACE/phone-startup.txt"
+
+              adb shell am force-stop "$APP" || true
+              adb logcat -c
+
+              adb shell am start -W -n "$COMPONENT" \
+                | tee -a "$GITHUB_WORKSPACE/phone-startup.txt"
+
+              sleep 4
+
+              adb shell pidof "$APP" | grep -q . || {
+                echo "PHONE FAIL: process stopped on cold start $ROUND"
+                exit 1
+              }
+
+              adb logcat -d >> "$GITHUB_WORKSPACE/phone-logcat.txt" || true
+
+              if adb logcat -d | grep -E \
+                "FATAL EXCEPTION|ANR in com\.althmany\.extractor|Process: com\.althmany\.extractor.*has died"; then
+                echo "PHONE FAIL: crash/ANR during cold start $ROUND"
+                exit 1
+              fi
+            done
+
+            echo "PHONE: three cold starts passed"
+
+            # The last force-stop happened before this point.
+            # Enable Accessibility only after the application is alive.
+            adb shell settings put secure enabled_accessibility_services "$SERVICE"
+            adb shell settings put secure accessibility_enabled 1
+
+            SETTING="$(adb shell settings get secure enabled_accessibility_services | tr -d '\r')"
+            echo "enabled_accessibility_services=$SETTING" \
+              | tee "$GITHUB_WORKSPACE/phone-accessibility-setting.txt"
+
+            [[ "$SETTING" == *"$SERVICE"* ]] || {
+              echo "PHONE FAIL: Android did not accept Accessibility component"
+              exit 1
+            }
+
+            BOUND=0
+
+            for _ in $(seq 1 60); do
+              adb shell dumpsys accessibility \
+                > "$GITHUB_WORKSPACE/phone-accessibility.txt" || true
+
+              if sed -n '/Bound services:/,/Enabled services:/p' \
+                "$GITHUB_WORKSPACE/phone-accessibility.txt" \
+                | grep -q "WhatsAppAccessibilityService"; then
+                BOUND=1
+                break
+              fi
+
+              sleep 0.25
+            done
+
+            if [[ "$BOUND" -ne 1 ]]; then
+              echo "PHONE FAIL: Accessibility enabled but service did not bind"
+              cat "$GITHUB_WORKSPACE/phone-accessibility.txt" || true
+              exit 1
+            fi
+
+            adb logcat -d > "$GITHUB_WORKSPACE/phone-logcat-final.txt" || true
+            adb exec-out screencap -p > "$GITHUB_WORKSPACE/phone-screen.png" || true
+
+            adb shell pidof "$APP" | grep -q . || {
+              echo "PHONE FAIL: app stopped after Accessibility binding"
+              exit 1
+            }
+
+            if grep -E \
+              "FATAL EXCEPTION|ANR in com\.althmany\.extractor|Process: com\.althmany\.extractor.*has died" \
+              "$GITHUB_WORKSPACE/phone-logcat-final.txt"; then
+              echo "PHONE FAIL: crash/ANR after Accessibility binding"
+              exit 1
+            fi
+
+            {
+              echo "AL-thmany PHYSICAL PHONE Runtime"
+              echo "================================"
+              echo "Package: $APP"
+              echo "Cold start x3: PASS"
+              echo "Accessibility setting: PASS"
+              echo "Accessibility bound: PASS"
+              echo "Process alive after bind: PASS"
+              echo "Result: READY FOR REAL PHONE TEST"
+            } | tee "$GITHUB_WORKSPACE/phone-runtime-report.txt"
+
+      - name: Prepare physical-phone APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p phone-output
+
+          cp "$PHONE_APK" \
+            phone-output/AL-thmany-2.21.1-PHONE.apk
+
+          sha256sum \
+            phone-output/AL-thmany-2.21.1-PHONE.apk \
+            > phone-output/AL-thmany-2.21.1-PHONE.apk.sha256
+
+          ls -lh phone-output
+
+      - name: Upload phone diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AL-thmany-PHONE-Runtime-Diagnostics
+          path: |
+            phone-build.log
+            phone-package.txt
+            phone-startup.txt
+            phone-accessibility-setting.txt
+            phone-accessibility.txt
+            phone-logcat.txt
+            phone-logcat-final.txt
+            phone-screen.png
+            phone-runtime-report.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload physical-phone APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AL-thmany-2.21.1-PHONE-APK
+          path: phone-output/
+          if-no-files-found: error
+          retention-days: 30

@@ -43,6 +43,18 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
+
+        // Dedicated installable build for physical phones.
+        // IMPORTANT: no ".debug" suffix, so the Android Accessibility
+        // component belongs to exactly com.althmany.extractor.
+        create("phoneTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = null
+            versionNameSuffix = "-phone-test"
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+        }
     }
 }
 
