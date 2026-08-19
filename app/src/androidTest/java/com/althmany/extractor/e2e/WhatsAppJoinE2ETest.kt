@@ -82,6 +82,7 @@ class WhatsAppJoinE2ETest {
         rows.values.forEach { assertEquals(WHATSAPP, it.targetPackage) }
 
         Log.i(TAG, "JOIN_ONLY PASS rows=${compact(rows.values)}")
+        Unit
     }
 
     @Test
@@ -102,6 +103,7 @@ class WhatsAppJoinE2ETest {
         assertFalse(rows.values.any { it.status == ScanStatus.JOINED || it.status == ScanStatus.REQUEST_PENDING })
 
         Log.i(TAG, "SCAN_ONLY PASS rows=${compact(rows.values)}")
+        Unit
     }
 
     private suspend fun waitForAccessibility() {
