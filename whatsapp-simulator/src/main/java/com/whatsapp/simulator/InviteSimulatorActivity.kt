@@ -177,18 +177,54 @@ class InviteSimulatorActivity : Activity() {
     }
 
     private fun renderJoinedChat(group: String) {
-        val root = baseColumn()
+        // Model a real WhatsApp conversation more closely:
+        // header/messages above and the message composer fixed near the bottom.
+        val root = baseColumn().apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        }
+
         root.addView(title(group))
         root.addView(label("Messages"))
-        repeat(8) { root.addView(label("E2E message ${it + 1}")) }
+
+        repeat(8) {
+            root.addView(label("E2E message ${it + 1}"))
+        }
+
+        // Push the composer to the bottom of the viewport, matching real WhatsApp geometry.
+        root.addView(
+            View(this),
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
         val composer = EditText(this).apply {
             hint = "Message"
             contentDescription = "Message"
             isSingleLine = true
         }
-        root.addView(composer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        // Intentionally no Close button: the controller must exercise its Back fallback.
-        setContentView(wrap(root))
+
+        root.addView(
+            composer,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        Log.i(TAG, "JOINED_CHAT code=$activeCode group=$group")
+
+        // Intentionally no Close button:
+        // the production controller must exercise Back fallback.
+        setContentView(
+            root,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
     }
 
     private fun renderTerminal(group: String, message: String) {
