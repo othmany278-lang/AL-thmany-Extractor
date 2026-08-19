@@ -82,7 +82,7 @@ checks = {
     'compileSdk 36': 'compileSdk = 36' in app_build,
     'targetSdk 36': 'targetSdk = 36' in app_build,
     'versionCode 2210': 'versionCode = 2210' in app_build,
-    'versionName 2.21.0': 'versionName = "2.20.2"' in app_build,
+    'versionName 2.21.0': 'versionName = "2.21.0"' in app_build,
     'Compose API36 BOM': 'compose-bom:2026.04.01' in app_build,
     'modern compilerOptions': 'compilerOptions {' in app_build and 'kotlinOptions {' not in app_build,
     'Known Compose weight import fixed': 'import androidx.compose.foundation.layout.weight' not in screens,
@@ -172,7 +172,7 @@ checks = {
     'Vendor clone Accessibility events supported': 'android:packageNames=' not in access_xml and 'cache.any { it.packageName == pkg }' in registry,
     'Dual Messenger matcher ported': all(x in dual for x in ['dual messenger', 'المراسل المزدوج', 'cloned whatsapp']),
     'No legacy joiner service merged': 'QuickJoinAccessibilityService' not in service,
-    'Workflow artifact v2.20.2': 'RuntimeFix-2.20.2' in workflow,
+    'Workflow artifact v2.21.0': 'ControllerRuntime-2.21.0' in workflow,
         'Exact dashboard UI': all(x in dashboard for x in ['AL-thmany', 'Ultimate WhatsApp Tool', 'الخصائص السريعة', 'محرك التشغيل', 'إعدادات متقدمة', 'تبديل النسخ']),
     'Runtime sync row discovery': all(x in adapter for x in ['collectChatListCandidatesDetailedInternal', 'nearestClickable', 'activateChatsTab']) and 'scanConversationList' in extract,
     'Archived group synchronization': 'sync-archived-groups' in extract and 'openArchived' in shizuku_runtime,
@@ -204,4 +204,4 @@ if errors:
         print(' -', e)
     sys.exit(1)
 
-print('\nAL-thmany Extractor 2.20.2 Runtime Fix source contract: PASS')
+print('\nAL-thmany Extractor 2.21.0 Controller Runtime source contract: PASS')
