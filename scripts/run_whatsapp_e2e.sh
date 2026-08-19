@@ -83,12 +83,91 @@ echo "E2E: AccessibilityService enabled/bound"
 # Instrumentation does not depend on that UI, so continue and let the test open the simulator.
 adb logcat -c
 
+# am instrument force-stops the target package before starting the JUnit process.
+# Start it in background, detect the replacement process, then re-bind Accessibility
+# so ScanController and the AccessibilityService live in the same test process.
+OLD_PID="$(adb shell pidof "$APP_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+echo "E2E: pre-instrumentation pid=${OLD_PID:-none}"
+
 set +e
 adb shell am instrument -w -r \
   -e class com.althmany.extractor.e2e.WhatsAppJoinE2ETest \
-  "$RUNNER" > "$ROOT/e2e-result.txt" 2>&1
+  "$RUNNER" > "$ROOT/e2e-result.txt" 2>&1 &
+INSTR_HOST_PID=$!
+set -e
+
+NEW_PID=""
+for _ in $(seq 1 80); do
+  CANDIDATE="$(adb shell pidof "$APP_PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$CANDIDATE" && "$CANDIDATE" != "$OLD_PID" ]]; then
+    NEW_PID="$CANDIDATE"
+    break
+  fi
+
+  if ! kill -0 "$INSTR_HOST_PID" 2>/dev/null; then
+    break
+  fi
+
+  sleep 0.25
+done
+
+echo "E2E: instrumentation target pid=${NEW_PID:-not-detected}"
+
+if [[ -z "$NEW_PID" ]]; then
+  set +e
+  wait "$INSTR_HOST_PID"
+  TEST_RC=$?
+  set -e
+  cat "$ROOT/e2e-result.txt" || true
+  echo "E2E FAIL: instrumentation target process did not start"
+  exit 1
+fi
+
+echo "E2E: rebinding AccessibilityService after instrumentation start"
+
+adb shell settings put secure accessibility_enabled 0
+adb shell settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
+sleep 0.35
+adb shell settings put secure enabled_accessibility_services "$SERVICE"
+adb shell settings put secure accessibility_enabled 1
+
+BOUND=0
+for _ in $(seq 1 80); do
+  adb shell dumpsys accessibility > "$ROOT/e2e-accessibility-after-rebind.txt" || true
+
+  if sed -n '/Bound services:/,/Enabled services:/p' \
+    "$ROOT/e2e-accessibility-after-rebind.txt" | grep -Fq "$SERVICE"; then
+    BOUND=1
+    break
+  fi
+
+  if ! kill -0 "$INSTR_HOST_PID" 2>/dev/null; then
+    break
+  fi
+
+  sleep 0.25
+done
+
+if [[ "$BOUND" -ne 1 ]]; then
+  echo "E2E FAIL: AccessibilityService did not bind inside instrumentation process"
+  cat "$ROOT/e2e-accessibility-after-rebind.txt" || true
+
+  set +e
+  wait "$INSTR_HOST_PID"
+  TEST_RC=$?
+  set -e
+
+  cat "$ROOT/e2e-result.txt" || true
+  exit 1
+fi
+
+echo "E2E: AccessibilityService rebound inside instrumentation target process"
+
+set +e
+wait "$INSTR_HOST_PID"
 TEST_RC=$?
 set -e
+
 cat "$ROOT/e2e-result.txt"
 
 adb logcat -d > "$ROOT/e2e-logcat.txt" || true
