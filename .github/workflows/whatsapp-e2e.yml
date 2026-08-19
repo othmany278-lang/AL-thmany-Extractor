@@ -89,7 +89,7 @@ jobs:
             grep -q 'CLICK_CONFIRM' e2e-logcat.txt 2>/dev/null && echo "| Continue / Confirm | ✅ |" || echo "| Continue / Confirm | ❌ |"
             grep -q 'CLOSE code=' e2e-logcat.txt 2>/dev/null && echo "| X / Close | ✅ |" || echo "| X / Close | ❌ |"
             grep -q 'BACK code=' e2e-logcat.txt 2>/dev/null && echo "| Back fallback | ✅ |" || echo "| Back fallback | ❌ |"
-            ! grep -q 'NAVIGATION_FAILURE' e2e-logcat.txt 2>/dev/null && echo "| Next-link progression | ✅ |" || echo "| Next-link progression | ❌ |"
+            grep -q 'JOIN_ONLY PASS' e2e-logcat.txt 2>/dev/null && ! grep -q 'NAVIGATION_FAILURE' e2e-logcat.txt 2>/dev/null && echo "| Next-link progression | ✅ |" || echo "| Next-link progression | ❌ |"
             grep -q 'JOIN_ONLY PASS' e2e-logcat.txt 2>/dev/null && echo "| JOIN_ONLY result verification | ✅ |" || echo "| JOIN_ONLY result verification | ❌ |"
             grep -q 'SCAN_ONLY PASS' e2e-logcat.txt 2>/dev/null && echo "| SCAN_ONLY no-click verification | ✅ |" || echo "| SCAN_ONLY no-click verification | ❌ |"
           } >> "$GITHUB_STEP_SUMMARY"

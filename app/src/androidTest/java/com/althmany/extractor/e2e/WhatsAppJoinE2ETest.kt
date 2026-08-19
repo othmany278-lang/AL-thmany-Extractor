@@ -107,7 +107,7 @@ class WhatsAppJoinE2ETest {
     }
 
     private suspend fun waitForAccessibility() {
-        withTimeout(12_000) {
+        withTimeout(25_000) {
             while (!ScanController.state.value.serviceConnected) {
                 delay(100)
             }

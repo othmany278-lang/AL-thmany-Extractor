@@ -36,12 +36,8 @@ adb install -r "$APP_APK"
 echo "E2E: installing instrumentation tests"
 adb install -r "$TEST_APK"
 
-# Enable the production AccessibilityService on the clean CI emulator. The E2E test uses the
-# same service/controller code as the real app; the only replacement is the external WhatsApp UI.
-adb shell settings put secure enabled_accessibility_services "$SERVICE"
-adb shell settings put secure accessibility_enabled 1
-sleep 2
-
+# First bring the application out of Android's stopped state.
+# IMPORTANT: do not force-stop the package after enabling Accessibility.
 adb shell am force-stop "$APP_PACKAGE" || true
 adb shell am start -W -n "$APP_PACKAGE/com.althmany.extractor.MainActivity" > "$ROOT/e2e-app-launch.txt" 2>&1 || {
   cat "$ROOT/e2e-app-launch.txt" || true
@@ -50,6 +46,38 @@ adb shell am start -W -n "$APP_PACKAGE/com.althmany.extractor.MainActivity" > "$
 }
 cat "$ROOT/e2e-app-launch.txt"
 sleep 2
+
+echo "E2E: enabling production AccessibilityService"
+adb shell settings put secure enabled_accessibility_services "$SERVICE"
+adb shell settings put secure accessibility_enabled 1
+
+SETTING="$(adb shell settings get secure enabled_accessibility_services | tr -d '\r')"
+echo "E2E: enabled_accessibility_services=$SETTING"
+
+if [[ "$SETTING" != *"$SERVICE"* ]]; then
+  echo "E2E FAIL: Accessibility setting was not accepted"
+  adb shell dumpsys accessibility > "$ROOT/e2e-accessibility.txt" || true
+  exit 1
+fi
+
+BOUND=0
+for _ in $(seq 1 40); do
+  if adb shell dumpsys accessibility 2>/dev/null | grep -Fq "$SERVICE"; then
+    BOUND=1
+    break
+  fi
+  sleep 0.5
+done
+
+adb shell dumpsys accessibility > "$ROOT/e2e-accessibility-before-test.txt" || true
+
+if [[ "$BOUND" -ne 1 ]]; then
+  echo "E2E FAIL: AccessibilityService did not bind"
+  cat "$ROOT/e2e-accessibility-before-test.txt" || true
+  exit 1
+fi
+
+echo "E2E: AccessibilityService enabled/bound"
 
 # The launcher may display Android's runtime-permission activity on a clean API 35 emulator.
 # Instrumentation does not depend on that UI, so continue and let the test open the simulator.
