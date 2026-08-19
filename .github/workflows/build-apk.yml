@@ -1,4 +1,4 @@
-name: Build AL-thmany Extractor 2.21.0 Smart Workspace + Global Controls APK
+name: Build AL-thmany Extractor 2.21.1 Runtime Verified APK
 
 on:
   push:
@@ -46,6 +46,9 @@ jobs:
       - name: Validate source contract
         run: python3 scripts/validate_release.py
 
+      - name: Validate repaired controller/runtime contract
+        run: python3 scripts/controller_runtime_2_21_1_check.py
+
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace --console=plain
 
@@ -58,6 +61,77 @@ jobs:
           set -o pipefail
           gradle :app:assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build.log
 
+
+      - name: Enable KVM for Android emulator
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install and launch APK on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            PACKAGE_NAME="com.althmany.extractor.debug"
+            ACTIVITY_NAME="com.althmany.extractor.MainActivity"
+            APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
+            test -n "$APK"
+
+            adb install -r "$APK"
+            adb shell am force-stop "$PACKAGE_NAME" || true
+            adb logcat -c
+
+            set +e
+            adb shell am start -W -n "$PACKAGE_NAME/$ACTIVITY_NAME" 2>&1 | tee runtime-launch.txt
+            LAUNCH_RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$LAUNCH_RC" -ne 0 ] || grep -Eq '(^|[[:space:]])Error:|Exception occurred while executing' runtime-launch.txt; then
+              adb logcat -d > runtime-logcat.txt || true
+              adb exec-out screencap -p > runtime-screen.png || true
+              echo "RUNTIME FAIL: launcher activity could not start"
+              exit 1
+            fi
+
+            sleep 8
+            PID="$(adb shell pidof "$PACKAGE_NAME" | tr -d '\r' || true)"
+            adb logcat -d > runtime-logcat.txt || true
+            adb exec-out screencap -p > runtime-screen.png || true
+
+            if [ -z "$PID" ]; then
+              echo "RUNTIME FAIL: application process is not alive after launch"
+              grep -E "FATAL EXCEPTION|AndroidRuntime|Process: $PACKAGE_NAME|ANR in $PACKAGE_NAME" runtime-logcat.txt || true
+              exit 1
+            fi
+
+            if grep -E "FATAL EXCEPTION|Process: $PACKAGE_NAME.*has died|ANR in $PACKAGE_NAME" runtime-logcat.txt; then
+              echo "RUNTIME FAIL: crash/ANR detected"
+              exit 1
+            fi
+
+            adb shell dumpsys activity activities | grep -F "$PACKAGE_NAME" > runtime-activity.txt || true
+            echo "RUNTIME PASS: APK installed, MainActivity launched, process alive (PID=$PID), no immediate crash/ANR"
+
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AL-thmany-Extractor-ControllerRuntime-2.21.1-Runtime-Diagnostics
+          path: |
+            runtime-launch.txt
+            runtime-logcat.txt
+            runtime-screen.png
+            runtime-activity.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Prepare artifact
         shell: bash
         run: |
@@ -65,14 +139,14 @@ jobs:
           APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
           test -n "$APK"
           mkdir -p output
-          cp "$APK" output/AL-thmany-Extractor-ControllerRuntime-2.21.0-debug.apk
-          sha256sum output/AL-thmany-Extractor-ControllerRuntime-2.21.0-debug.apk > output/AL-thmany-Extractor-ControllerRuntime-2.21.0-debug.apk.sha256
+          cp "$APK" output/AL-thmany-Extractor-ControllerRuntime-2.21.1-debug.apk
+          sha256sum output/AL-thmany-Extractor-ControllerRuntime-2.21.1-debug.apk > output/AL-thmany-Extractor-ControllerRuntime-2.21.1-debug.apk.sha256
           ls -lh output
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AL-thmany-Extractor-ControllerRuntime-2.21.0-APK
+          name: AL-thmany-Extractor-ControllerRuntime-2.21.1-APK
           path: output/
           if-no-files-found: error
           retention-days: 30
@@ -81,7 +155,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: AL-thmany-Extractor-ControllerRuntime-2.21.0-Build-Log
+          name: AL-thmany-Extractor-ControllerRuntime-2.21.1-Build-Log
           path: build.log
           if-no-files-found: ignore
           retention-days: 7

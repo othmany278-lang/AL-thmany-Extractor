@@ -28,11 +28,16 @@ fun main() {
     check(status("تحقق من اتصالك بالإنترنت").status == ScanStatus.NETWORK_ERROR)
     check(status("نص عادي").status == ScanStatus.UNKNOWN)
 
-    val meta = status("مجتمع الوظائف", "245 مشاركًا", "طلب الانضمام", "المجتمع")
+    val meta = status("مجتمع الوظائف", "245 مشاركًا", "طلب الانضمام إلى المجتمع", "المجتمعات")
     check(meta.status == ScanStatus.APPROVAL)
     check(meta.inviteKind == InviteKind.COMMUNITY)
     check(meta.memberCountText?.contains("245") == true)
     check(meta.confidence >= 90)
+
+    val navNoise = status("المجتمعات", "Communities", "مجموعة الطب", "الانضمام إلى المجموعة")
+    check(navNoise.status == ScanStatus.DIRECT)
+    check(navNoise.inviteKind == InviteKind.GROUP)
+    check(navNoise.groupName == "مجموعة الطب")
 
     check(ScanRetryPolicy.shouldRetry(ScanStatus.UNKNOWN, 1, 3))
     check(ScanRetryPolicy.shouldRetry(ScanStatus.NETWORK_ERROR, 2, 3))

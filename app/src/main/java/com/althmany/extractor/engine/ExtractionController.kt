@@ -413,17 +413,17 @@ object ExtractionController {
                 if (!openWhatsApp()) return false
                 awaitWhatsAppRoot(svc, expectedPackage, 2_500L)
             }
-            if (adapter.isConversationListVisible(svc.currentRoot())) return true
+            if (adapter.isConversationListVisible(svc.currentRoot(), expectedPackage)) return true
             if (adapter.activateChatsTab(svc.currentRoot())) {
                 awaitUiChange(maxOf(timing.searchOpenMs, 140L))
-                if (adapter.isConversationListVisible(svc.currentRoot())) return true
+                if (adapter.isConversationListVisible(svc.currentRoot(), expectedPackage)) return true
             }
             if (pass < 6) {
                 svc.performBack()
                 awaitUiChange(maxOf(timing.searchOpenMs, 140L))
             }
         }
-        return adapter.isConversationListVisible(svc.currentRoot())
+        return adapter.isConversationListVisible(svc.currentRoot(), expectedPackage)
     }
 
     fun refreshStats() {
