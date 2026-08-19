@@ -187,7 +187,7 @@ adb pull /sdcard/e2e-window.xml "$ROOT/e2e-window.xml" >/dev/null 2>&1 || true
   grep -E 'ALThmanyE2E|WhatsAppSim' "$ROOT/e2e-logcat.txt" || true
 } > "$ROOT/whatsapp-e2e-report.txt"
 
-if [[ "$TEST_RC" -ne 0 ]] || grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|INSTRUMENTATION_CODE: -1' "$ROOT/e2e-result.txt"; then
+if [[ "$TEST_RC" -ne 0 ]] || grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' "$ROOT/e2e-result.txt"; then
   echo "E2E FAIL: instrumentation reported a failure"
   exit 1
 fi
